@@ -110,8 +110,12 @@ jobs:
     - name: Get version
       id: version
       run: |
-        VERSION=$(grep "ZEROTIER_ONE_VERSION_MAJOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_MINOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_REVISION" version.h | awk '{print $3}')
+        MAJOR=$(grep "ZEROTIER_ONE_VERSION_MAJOR" version.h | grep -o '[0-9]*' | head -1)
+        MINOR=$(grep "ZEROTIER_ONE_VERSION_MINOR" version.h | grep -o '[0-9]*' | head -1)
+        REV=$(grep "ZEROTIER_ONE_VERSION_REVISION" version.h | grep -o '[0-9]*' | head -1)
+        VERSION="${MAJOR}.${MINOR}.${REV}"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
 
     - name: Create Release
       uses: softprops/action-gh-release@v2

@@ -191,9 +191,10 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
         case ZT_EVENT_OFFLINE: eventName = "OFFLINE"; break;
         case ZT_EVENT_ONLINE: eventName = "ONLINE"; break;
         case ZT_EVENT_DOWN: eventName = "DOWN"; break;
-        case ZT_EVENT_FATAL_ERROR: eventName = "FATAL_ERROR"; break;
+        case ZT_EVENT_FATAL_ERROR_IDENTITY_COLLISION: eventName = "FATAL_ERROR_ID_COLLISION"; break;
         case ZT_EVENT_TRACE: eventName = "TRACE"; break;
         case ZT_EVENT_USER_MESSAGE: eventName = "USER_MESSAGE"; break;
+        case ZT_EVENT_REMOTE_TRACE: eventName = "REMOTE_TRACE"; break;
         default: break;
     }
 
@@ -216,13 +217,17 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
                 });
             }
             break;
-        case ZT_EVENT_FATAL_ERROR:
-            ztLog([NSString stringWithFormat:@"FATAL ERROR: %d", metaData ? *(const int*)metaData : -1]);
+        case ZT_EVENT_FATAL_ERROR_IDENTITY_COLLISION:
+            ztLog(@"FATAL ERROR: Identity collision! Another node has the same address.");
             break;
         case ZT_EVENT_TRACE: {
-            const ZT_VirtualNetworkTrace *trace = (const ZT_VirtualNetworkTrace *)metaData;
-            if (trace) {
-                ztLog([NSString stringWithFormat:@"TRACE: nwid=%.16llx event=%d len=%u", trace->nwid, trace->event, trace->len]);
+            ztLog(@"TRACE event received");
+            break;
+        }
+        case ZT_EVENT_REMOTE_TRACE: {
+            const ZT_RemoteTrace *rt = (const ZT_RemoteTrace *)metaData;
+            if (rt) {
+                ztLog([NSString stringWithFormat:@"REMOTE TRACE: from=%.10llx len=%u", rt->origin, rt->len]);
             }
             break;
         }
@@ -256,13 +261,15 @@ static void logNodeStatus() {
                 if (p->paths[j].address.ss_family == AF_INET) {
                     const struct sockaddr_in *sin = (const struct sockaddr_in *)&p->paths[j].address;
                     inet_ntop(AF_INET, &sin->sin_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: %s:%u pref=%d stable=%d",
-                           pathAddr, ntohs(sin->sin_port), p->paths[j].preferred, p->paths[j].stable]);
+                    ztLog([NSString stringWithFormat:@"    PATH: %s:%u pref=%d lastSend=%llu lastRecv=%llu",
+                           pathAddr, ntohs(sin->sin_port), p->paths[j].preferred,
+                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
                 } else if (p->paths[j].address.ss_family == AF_INET6) {
                     const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&p->paths[j].address;
                     inet_ntop(AF_INET6, &sin6->sin6_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: [%s]:%u pref=%d stable=%d",
-                           pathAddr, ntohs(sin6->sin6_port), p->paths[j].preferred, p->paths[j].stable]);
+                    ztLog([NSString stringWithFormat:@"    PATH: [%s]:%u pref=%d lastSend=%llu lastRecv=%llu",
+                           pathAddr, ntohs(sin6->sin6_port), p->paths[j].preferred,
+                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
                 }
             }
         }

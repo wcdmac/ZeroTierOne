@@ -2,6 +2,7 @@
 
 "TAB_NETWORK" = "网络";
 "TAB_IDENTITY" = "身份";
+"TAB_LOG" = "日志";
 "TAB_SETTINGS" = "设置";
 "NETWORK_TITLE" = "ZeroTier One";
 "STATUS_OFFLINE" = "离线";
@@ -23,6 +24,11 @@
 "PUBLIC_IDENTITY" = "公共身份:";
 "COPY_PUBLIC_ID" = "复制公共身份";
 "COPIED" = "已复制！";
+"LOG_TITLE" = "运行日志";
+"LOG_COPY" = "复制";
+"LOG_CLEAR" = "清空";
+"LOG_AUTOSCROLL" = "自动";
+"LOG_COPIED" = "日志已复制到剪贴板";
 "SETTINGS_TITLE" = "设置";
 "SETTINGS_VERSION" = "版本";
 "SETTINGS_CORE" = "核心引擎";

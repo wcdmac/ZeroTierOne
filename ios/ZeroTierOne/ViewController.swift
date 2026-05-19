@@ -19,6 +19,13 @@ class MainTabBarController: UITabBarController {
             selectedImage: UIImage(systemName: "key.fill")
         )
 
+        let logVC = LogViewController()
+        logVC.tabBarItem = UITabBarItem(
+            title: NSLocalizedString("TAB_LOG", value: "Log", comment: "Log tab"),
+            image: UIImage(systemName: "list.bullet.rectangle"),
+            selectedImage: UIImage(systemName: "list.bullet.rectangle.fill")
+        )
+
         let settingsVC = SettingsViewController()
         settingsVC.tabBarItem = UITabBarItem(
             title: NSLocalizedString("TAB_SETTINGS", value: "Settings", comment: "Settings tab"),
@@ -29,6 +36,7 @@ class MainTabBarController: UITabBarController {
         viewControllers = [
             UINavigationController(rootViewController: networkVC),
             UINavigationController(rootViewController: identityVC),
+            UINavigationController(rootViewController: logVC),
             UINavigationController(rootViewController: settingsVC)
         ]
     }
@@ -43,6 +51,7 @@ class NetworkViewController: UIViewController {
     private var leaveButton: UIButton!
     private var networkListView: UITableView!
     private var statusImageView: UIImageView!
+    private var statsLabel: UILabel!
 
     private let ztBridge = ZeroTierBridge()
 
@@ -89,6 +98,14 @@ class NetworkViewController: UIViewController {
         nodeIdLabel.textColor = .systemBlue
         nodeIdLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(nodeIdLabel)
+
+        statsLabel = UILabel()
+        statsLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        statsLabel.textAlignment = .center
+        statsLabel.textColor = .tertiaryLabel
+        statsLabel.numberOfLines = 0
+        statsLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statsLabel)
 
         networkIdTextField = UITextField()
         networkIdTextField.placeholder = NSLocalizedString("NETWORK_ID_PLACEHOLDER", value: "Enter Network ID (16 hex digits)", comment: "Network ID placeholder")
@@ -145,8 +162,13 @@ class NetworkViewController: UIViewController {
             nodeIdLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             nodeIdLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 4),
 
+            statsLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statsLabel.topAnchor.constraint(equalTo: nodeIdLabel.bottomAnchor, constant: 2),
+            statsLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            statsLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
+
             networkIdTextField.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            networkIdTextField.topAnchor.constraint(equalTo: nodeIdLabel.bottomAnchor, constant: 16),
+            networkIdTextField.topAnchor.constraint(equalTo: statsLabel.bottomAnchor, constant: 12),
             networkIdTextField.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.9),
             networkIdTextField.heightAnchor.constraint(equalToConstant: 40),
 
@@ -222,6 +244,7 @@ class NetworkViewController: UIViewController {
             leaveButton.isEnabled = false
         }
         nodeIdLabel.text = String(format: NSLocalizedString("NODE_ID_FORMAT", value: "Node: %@", comment: "Node ID format"), ztBridge.nodeId())
+        statsLabel.text = ztBridge.nodeStatusInfo()
     }
 
     private func showAlert(title: String, message: String) {
@@ -345,6 +368,132 @@ class IdentityViewController: UIViewController {
     }
 }
 
+class LogViewController: UIViewController {
+
+    private let ztBridge = ZeroTierBridge()
+    private var tableView: UITableView!
+    private var logEntries: [String] = []
+    private var refreshTimer: Timer?
+    private var autoScroll = true
+    private var autoScrollButton: UIBarButtonItem!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = NSLocalizedString("LOG_TITLE", value: "Log", comment: "Log page title")
+        view.backgroundColor = .systemBackground
+
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(title: NSLocalizedString("LOG_COPY", value: "Copy", comment: "Copy log"), style: .plain, target: self, action: #selector(copyLog)),
+            UIBarButtonItem(title: NSLocalizedString("LOG_CLEAR", value: "Clear", comment: "Clear log"), style: .plain, target: self, action: #selector(clearLog))
+        ]
+
+        autoScrollButton = UIBarButtonItem(
+            title: NSLocalizedString("LOG_AUTOSCROLL", value: "Auto", comment: "Auto scroll"),
+            style: .plain,
+            target: self,
+            action: #selector(toggleAutoScroll)
+        )
+        autoScrollButton.tintColor = .systemBlue
+        navigationItem.leftBarButtonItem = autoScrollButton
+
+        tableView = UITableView(frame: .zero, style: .plain)
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "LogCell")
+        tableView.separatorInset = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
+        view.addSubview(tableView)
+
+        NSLayoutConstraint.activate([
+            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        refreshLog()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.refreshLog()
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    @objc private func refreshLog() {
+        let newEntries = ztBridge.logEntries()
+        if newEntries.count != logEntries.count {
+            let oldCount = logEntries.count
+            logEntries = newEntries
+            tableView.reloadData()
+            if autoScroll && logEntries.count > oldCount {
+                let lastRow = logEntries.count - 1
+                if lastRow >= 0 {
+                    tableView.scrollToRow(at: IndexPath(row: lastRow, section: 0), at: .bottom, animated: false)
+                }
+            }
+        }
+    }
+
+    @objc private func copyLog() {
+        UIPasteboard.general.string = logEntries.joined(separator: "\n")
+        let alert = UIAlertController(title: nil, message: NSLocalizedString("LOG_COPIED", value: "Log copied to clipboard", comment: "Log copied"), preferredStyle: .alert)
+        present(alert, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
+    }
+
+    @objc private func clearLog() {
+        logEntries = []
+        tableView.reloadData()
+    }
+
+    @objc private func toggleAutoScroll() {
+        autoScroll = !autoScroll
+        autoScrollButton.tintColor = autoScroll ? .systemBlue : .systemGray
+    }
+}
+
+extension LogViewController: UITableViewDataSource, UITableViewDelegate {
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return logEntries.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "LogCell", for: indexPath)
+        let entry = logEntries[indexPath.row]
+
+        cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        cell.textLabel?.numberOfLines = 0
+        cell.textLabel?.text = entry
+        cell.selectionStyle = .none
+
+        if entry.contains("FAIL") || entry.contains("FATAL") || entry.contains("ERROR") {
+            cell.textLabel?.textColor = .systemRed
+        } else if entry.contains("TX ") || entry.contains("EVENT: ONLINE") {
+            cell.textLabel?.textColor = .systemGreen
+        } else if entry.contains("RX") {
+            cell.textLabel?.textColor = .systemBlue
+        } else if entry.contains("EVENT: OFFLINE") {
+            cell.textLabel?.textColor = .systemOrange
+        } else {
+            cell.textLabel?.textColor = .secondaryLabel
+        }
+
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+    }
+}
+
 class SettingsViewController: UIViewController {
 
     override func viewDidLoad() {
@@ -364,7 +513,7 @@ class SettingsViewController: UIViewController {
             (NSLocalizedString("SETTINGS_PLATFORM", value: "Platform", comment: "Platform label"), "iOS arm64"),
             (NSLocalizedString("SETTINGS_MIN_IOS", value: "Minimum iOS", comment: "Min iOS label"), "15.0"),
             (NSLocalizedString("SETTINGS_BUILD", value: "Build Type", comment: "Build type label"), NSLocalizedString("SETTINGS_UNSIGNED", value: "Unsigned", comment: "Unsigned build")),
-            (NSLocalizedString("SETTINGS_LANG", value: "Language Support", comment: "Language label"), "English / 简体中文")
+            (NSLocalizedString("SETTINGS_LANG", value: "Language Support", comment: "Language label"), "English / \u{7b80}\u{4f53}\u{4e2d}\u{6587}")
         ]
 
         for (label, value) in items {

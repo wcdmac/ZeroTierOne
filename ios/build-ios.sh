@@ -30,8 +30,8 @@ clang++ \
     -stdlib=libc++ \
     -fobjc-arc \
     -c \
+    -I"$ROOT_DIR" \
     -I"$ROOT_DIR/include" \
-    -I"$ROOT_DIR/node" \
     -I"$ROOT_DIR/ext" \
     -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/core/include" \
     -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/simpleapi/include" \

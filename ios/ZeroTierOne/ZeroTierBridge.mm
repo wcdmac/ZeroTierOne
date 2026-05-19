@@ -248,7 +248,7 @@ static void logNodeStatus() {
 
     ZT_PeerList *pl = ZT_Node_peers(s_node);
     if (pl) {
-        ztLog([NSString stringWithFormat:@"PEERS: %u total", pl->peerCount]);
+        ztLog([NSString stringWithFormat:@"PEERS: %lu total", (unsigned long)pl->peerCount]);
         for (unsigned int i = 0; i < pl->peerCount && i < 10; i++) {
             ZT_Peer *p = &pl->peers[i];
             char pAddr[11] = {0};
@@ -648,8 +648,8 @@ static void nodeThreadFunc() {
         std::lock_guard<std::mutex> lock(s_nodeMutex);
         if (s_node) {
             enum ZT_ResultCode rc = ZT_Node_join(s_node, nwid, nullptr, nullptr);
-            ztLog([NSString stringWithFormat:@"ZT_Node_join result: %d (0=OK, 2=ALREADY)", (int)rc]);
-            if (rc != ZT_RESULT_OK && rc != ZT_RESULT_OK_ALREADY) {
+            ztLog([NSString stringWithFormat:@"ZT_Node_join result: %d (0=OK, 1=IGNORED)", (int)rc]);
+            if (rc != ZT_RESULT_OK && rc != ZT_RESULT_OK_IGNORED) {
                 if (completion) completion(NO);
                 return;
             }

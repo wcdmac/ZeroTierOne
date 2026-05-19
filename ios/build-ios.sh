@@ -20,6 +20,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OBJ_DIR"
 mkdir -p "$APP_DIR"
+mkdir -p "$APP_DIR/Base.lproj"
 
 COMMON_FLAGS="-target ${ARCH}-apple-ios${MIN_VERSION} -isysroot $SDK -miphoneos-version-min=$MIN_VERSION"
 
@@ -76,9 +77,12 @@ swiftc \
 
 echo "=== Step 3: Link executable ==="
 SWIFT_OBJS="$OBJ_DIR/swift/AppDelegate.o $OBJ_DIR/swift/SceneDelegate.o $OBJ_DIR/swift/ViewController.o"
-swiftc \
+clang++ \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
+    -isysroot "$SDK" \
+    -miphoneos-version-min=$MIN_VERSION \
+    -std=c++17 \
+    -stdlib=libc++ \
     -L "$ROOT_DIR" \
     -lzerotiercore-ios \
     -lc++ \
@@ -99,27 +103,23 @@ plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.
     cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
 echo "=== Step 6: Compile storyboards ==="
-if [ -f "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" ]; then
-    ibtool \
-        --target-device iphone \
-        --target-device ipad \
-        --minimum-deployment-target $MIN_VERSION \
-        --compilation-directory "$APP_DIR/Base.lproj" \
-        --errors --warnings --notices \
-        "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" "$APP_DIR/Base.lproj/Main.storyboard"
-fi
+mkdir -p "$APP_DIR/Base.lproj"
 
-if [ -f "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" ]; then
-    ibtool \
-        --target-device iphone \
-        --target-device ipad \
-        --minimum-deployment-target $MIN_VERSION \
-        --compilation-directory "$APP_DIR/Base.lproj" \
-        --errors --warnings --notices \
-        "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" "$APP_DIR/Base.lproj/LaunchScreen.storyboard"
-fi
+ibtool \
+    --target-device iphone \
+    --target-device ipad \
+    --minimum-deployment-target $MIN_VERSION \
+    --compilation-directory "$APP_DIR/Base.lproj" \
+    "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" 2>&1 || \
+cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" "$APP_DIR/Base.lproj/Main.storyboard"
+
+ibtool \
+    --target-device iphone \
+    --target-device ipad \
+    --minimum-deployment-target $MIN_VERSION \
+    --compilation-directory "$APP_DIR/Base.lproj" \
+    "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" 2>&1 || \
+cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" "$APP_DIR/Base.lproj/LaunchScreen.storyboard"
 
 echo "=== Step 7: Copy assets and resources ==="
 cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"

@@ -20,7 +20,6 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OBJ_DIR"
 mkdir -p "$APP_DIR"
-mkdir -p "$APP_DIR/Base.lproj"
 
 COMMON_FLAGS="-target ${ARCH}-apple-ios${MIN_VERSION} -isysroot $SDK -miphoneos-version-min=$MIN_VERSION"
 
@@ -99,26 +98,7 @@ echo "=== Step 5: Process Info.plist ==="
 plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
-echo "=== Step 6: Compile storyboards ==="
-mkdir -p "$APP_DIR/Base.lproj"
-
-ibtool \
-    --target-device iphone \
-    --target-device ipad \
-    --minimum-deployment-target $MIN_VERSION \
-    --compilation-directory "$APP_DIR/Base.lproj" \
-    "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" 2>&1 || \
-cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" "$APP_DIR/Base.lproj/Main.storyboard"
-
-ibtool \
-    --target-device iphone \
-    --target-device ipad \
-    --minimum-deployment-target $MIN_VERSION \
-    --compilation-directory "$APP_DIR/Base.lproj" \
-    "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" 2>&1 || \
-cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" "$APP_DIR/Base.lproj/LaunchScreen.storyboard"
-
-echo "=== Step 7: Copy assets and resources ==="
+echo "=== Step 6: Copy resources ==="
 cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
 
 mkdir -p "$APP_DIR/zh-Hans.lproj"

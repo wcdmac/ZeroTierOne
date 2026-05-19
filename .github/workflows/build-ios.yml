@@ -7,9 +7,7 @@ on:
       - 'node/**'
       - 'include/**'
       - 'osdep/**'
-      - 'ext/arm32-neon-salsa2012-asm/**'
-      - 'ext/x64-salsa2012-asm/**'
-      - 'ext/http-parser/**'
+      - 'ext/prometheus-cpp-lite-1.0/**'
       - 'ios/**'
       - 'make-ios.mk'
       - 'version.h'
@@ -28,11 +26,8 @@ jobs:
           node
           include
           osdep
-          ext/arm32-neon-salsa2012-asm
-          ext/x64-salsa2012-asm
-          ext/http-parser
-          ext/nlohmann
           ext/prometheus-cpp-lite-1.0
+          ext/nlohmann
           ios
           make-ios.mk
           version.h
@@ -46,9 +41,6 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
 
-    - name: Install xcodegen
-      run: brew install xcodegen
-
     - name: Build ZeroTier core for iOS
       run: |
         cd $GITHUB_WORKSPACE
@@ -58,20 +50,14 @@ jobs:
     - name: Verify library
       run: |
         ls -la $GITHUB_WORKSPACE/libzerotiercore-ios.a
-        lipo -info $GITHUB_WORKSPACE/libzerotiercore-ios.a || true
         file $GITHUB_WORKSPACE/libzerotiercore-ios.a
-
-    - name: Generate Xcode project
-      run: |
-        cd $GITHUB_WORKSPACE/ios
-        xcodegen generate
 
     - name: Build iOS app (unsigned)
       run: |
         cd $GITHUB_WORKSPACE/ios
         xcodebuild \
           -project ZeroTierOne.xcodeproj \
-          -scheme ZeroTierOne \
+          -target ZeroTierOne \
           -sdk iphoneos \
           -configuration Release \
           -derivedDataPath build \

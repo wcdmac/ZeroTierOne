@@ -57,7 +57,7 @@ jobs:
         cd $GITHUB_WORKSPACE/ios
         xcodebuild \
           -project ZeroTierOne.xcodeproj \
-          -target ZeroTierOne \
+          -scheme ZeroTierOne \
           -sdk iphoneos \
           -configuration Release \
           -derivedDataPath build \

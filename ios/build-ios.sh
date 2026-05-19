@@ -71,7 +71,6 @@ swiftc \
     -framework CoreGraphics \
     -framework QuartzCore \
     -framework SwiftUI \
-    -framework Network \
     -o "$APP_DIR/$APP_NAME" \
     $SWIFT_OBJS \
     "$OBJ_DIR/ZeroTierBridge.o"

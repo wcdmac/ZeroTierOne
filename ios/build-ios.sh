@@ -49,13 +49,16 @@ swiftc \
     -parse-as-library \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
     -emit-object \
-    -o "$OBJ_DIR/swift/AppDelegate.o" \
+    -j 1 \
     "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
     "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
     "$PROJECT_DIR/ZeroTierOne/ViewController.swift"
 
 echo "=== Step 3: Link executable ==="
-SWIFT_OBJS="$OBJ_DIR/swift/AppDelegate.o"
+SWIFT_OBJS=$(find "$OBJ_DIR/swift" -name "*.o" ! -name "ZeroTierBridge.o" 2>/dev/null)
+if [ -z "$SWIFT_OBJS" ]; then
+    SWIFT_OBJS=$(find . -name "*.o" ! -name "ZeroTierBridge.o" 2>/dev/null)
+fi
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \

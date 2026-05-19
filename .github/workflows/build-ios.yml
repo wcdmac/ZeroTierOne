@@ -41,6 +41,12 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
 
+    - name: Fix line endings
+      run: |
+        find $GITHUB_WORKSPACE/ios -name "*.pbxproj" -o -name "*.xcscheme" -o -name "*.plist" -o -name "*.strings" -o -name "*.storyboard" | while read f; do
+          sed -i '' 's/\r$//' "$f"
+        done
+
     - name: Build ZeroTier core for iOS
       run: |
         cd $GITHUB_WORKSPACE

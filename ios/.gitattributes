@@ -1,0 +1,11 @@
+*.pbxproj text eol=lf
+*.xcscheme text eol=lf
+*.plist text eol=lf
+*.strings text eol=lf
+*.storyboard text eol=lf
+*.swift text eol=lf
+*.h text eol=lf
+*.m text eol=lf
+*.mm text eol=lf
+*.mk text eol=lf
+*.yml text eol=lf

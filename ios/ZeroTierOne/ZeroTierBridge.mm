@@ -2,7 +2,7 @@
 #include <string>
 #include <node/Identity.hpp>
 #include <node/Utils.hpp>
-#include <node/OSUtils.hpp>
+#include <osdep/OSUtils.hpp>
 
 @interface ZeroTierBridge ()
 @end

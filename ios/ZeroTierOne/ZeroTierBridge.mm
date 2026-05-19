@@ -89,6 +89,8 @@ static uint64_t addrKey(const struct sockaddr_storage *addr) {
     return 0;
 }
 
+static void receiveOnConnection(nw_connection_t conn);
+
 static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remoteAddr) {
     uint64_t key = addrKey(remoteAddr);
     {
@@ -147,6 +149,34 @@ static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remo
     }
 
     nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+
+    nw_connection_set_state_changed_handler(conn, ^(nw_connection_state_t state, nw_error_t stateErr) {
+        switch (state) {
+            case nw_connection_state_ready:
+                ztLog([NSString stringWithFormat:@"NW CONN READY %@:%u", hostStr, port]);
+                receiveOnConnection(conn);
+                break;
+            case nw_connection_state_failed:
+                ztLog([NSString stringWithFormat:@"NW CONN FAILED %@:%u domain=%d code=%d",
+                       hostStr, port,
+                       stateErr ? (int)nw_error_get_error_domain(stateErr) : -1,
+                       stateErr ? (int)nw_error_get_error_code(stateErr) : -1]);
+                {
+                    std::lock_guard<std::mutex> lock(s_connMutex);
+                    s_connections.erase(key);
+                }
+                break;
+            case nw_connection_state_waiting:
+                ztLog([NSString stringWithFormat:@"NW CONN WAITING %@:%u", hostStr, port]);
+                break;
+            case nw_connection_state_cancelled:
+                ztLog([NSString stringWithFormat:@"NW CONN CANCELLED %@:%u", hostStr, port]);
+                break;
+            default:
+                break;
+        }
+    });
+
     nw_connection_start(conn);
 
     {
@@ -158,14 +188,14 @@ static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remo
     return conn;
 }
 
-static void receiveFromListener(nw_connection_t conn) {
+static void receiveOnConnection(nw_connection_t conn) {
     nw_connection_receive(conn, 1, ZT_MAX_PHYSMTU, ^(dispatch_data_t content, nw_content_context_t context,
-                                                        bool is_complete, nw_error_t recvError) {
-        if (recvError) {
-            nw_error_domain_t errDomain = nw_error_get_error_domain(recvError);
-            int errCode = (int)nw_error_get_error_code(recvError);
-            if (errDomain != nw_error_domain_posix || errCode != EAGAIN) {
-                ztLog([NSString stringWithFormat:@"NW recv error: domain=%d code=%d", (int)errDomain, errCode]);
+                                                        bool is_complete, nw_error_t recvErr) {
+        if (recvErr) {
+            nw_error_domain_t errDomain = nw_error_get_error_domain(recvErr);
+            int errCode = (int)nw_error_get_error_code(recvErr);
+            if (errDomain != nw_error_domain_posix || (errCode != EAGAIN && errCode != EWOULDBLOCK)) {
+                ztLog([NSString stringWithFormat:@"NW recv err: domain=%d code=%d", (int)errDomain, errCode]);
             }
         }
         if (content) {
@@ -180,31 +210,29 @@ static void receiveFromListener(nw_connection_t conn) {
 
                 char addrBuf[INET6_ADDRSTRLEN] = {0};
                 uint16_t rPort = 0;
+                struct sockaddr_storage fromAddr;
+                memset(&fromAddr, 0, sizeof(fromAddr));
+
                 if (remote) {
                     const struct sockaddr *sa = nw_endpoint_get_address(remote);
-                    if (sa && sa->sa_family == AF_INET) {
-                        const struct sockaddr_in *sin = (const struct sockaddr_in *)sa;
-                        inet_ntop(AF_INET, &sin->sin_addr, addrBuf, sizeof(addrBuf));
-                        rPort = ntohs(sin->sin_port);
-                    } else if (sa && sa->sa_family == AF_INET6) {
-                        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)sa;
-                        inet_ntop(AF_INET6, &sin6->sin6_addr, addrBuf, sizeof(addrBuf));
-                        rPort = ntohs(sin6->sin6_port);
+                    if (sa) {
+                        memcpy(&fromAddr, sa, sa->sa_len);
+                        if (sa->sa_family == AF_INET) {
+                            const struct sockaddr_in *sin = (const struct sockaddr_in *)sa;
+                            inet_ntop(AF_INET, &sin->sin_addr, addrBuf, sizeof(addrBuf));
+                            rPort = ntohs(sin->sin_port);
+                        } else if (sa->sa_family == AF_INET6) {
+                            const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)sa;
+                            inet_ntop(AF_INET6, &sin6->sin6_addr, addrBuf, sizeof(addrBuf));
+                            rPort = ntohs(sin6->sin6_port);
+                        }
                     }
                 }
 
                 ztLog([NSString stringWithFormat:@"RX %zu bytes from %s:%u", len, addrBuf, rPort]);
 
                 int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
-                int64_t localSock = (remote && nw_endpoint_get_address(remote) &&
-                                     nw_endpoint_get_address(remote)->sa_family == AF_INET6) ? s_localPort6 : s_localPort4;
-
-                struct sockaddr_storage fromAddr;
-                memset(&fromAddr, 0, sizeof(fromAddr));
-                if (remote) {
-                    const struct sockaddr *sa = nw_endpoint_get_address(remote);
-                    if (sa) memcpy(&fromAddr, sa, sa->sa_len);
-                }
+                int64_t localSock = (fromAddr.ss_family == AF_INET6) ? s_localPort6 : s_localPort4;
 
                 std::lock_guard<std::mutex> lock(s_nodeMutex);
                 if (s_node && fromAddr.ss_family != 0) {
@@ -216,7 +244,7 @@ static void receiveFromListener(nw_connection_t conn) {
             }
         }
         if (!is_complete && s_nodeRunning) {
-            receiveFromListener(conn);
+            receiveOnConnection(conn);
         }
     });
 }
@@ -593,7 +621,7 @@ static void nodeThreadFunc() {
             ztLog(@"NW: incoming IPv4 connection");
             nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
             nw_connection_start(conn);
-            receiveFromListener(conn);
+            receiveOnConnection(conn);
         });
         nw_listener_set_state_changed_handler(s_listener4, ^(nw_listener_state_t state, nw_error_t error) {
             switch (state) {
@@ -630,7 +658,7 @@ static void nodeThreadFunc() {
             ztLog(@"NW: incoming IPv6 connection");
             nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
             nw_connection_start(conn);
-            receiveFromListener(conn);
+            receiveOnConnection(conn);
         });
         nw_listener_set_state_changed_handler(s_listener6, ^(nw_listener_state_t state, nw_error_t error) {
             switch (state) {

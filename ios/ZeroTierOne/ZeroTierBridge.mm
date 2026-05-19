@@ -126,7 +126,7 @@ static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remo
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
-    nw_parameters_set_reuse_local_port(params, true);
+    nw_parameters_set_reuse_local_address(params, true);
 
     if (isV6 && s_localPort6 > 0) {
         char addr6Str[INET6_ADDRSTRLEN] = "::";
@@ -160,12 +160,12 @@ static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remo
 
 static void receiveFromListener(nw_connection_t conn) {
     nw_connection_receive(conn, 1, ZT_MAX_PHYSMTU, ^(dispatch_data_t content, nw_content_context_t context,
-                                                        bool is_complete, nw_error_t error) {
-        if (error) {
-            nw_error_domain_t domain = nw_error_get_error_domain(error);
-            int code = (int)nw_error_get_error_code(error);
-            if (domain != nw_error_domain_posix || code != EAGAIN) {
-                ztLog([NSString stringWithFormat:@"NW recv error: domain=%d code=%d", (int)domain, code]);
+                                                        bool is_complete, nw_error_t recvError) {
+        if (recvError) {
+            nw_error_domain_t errDomain = nw_error_get_error_domain(recvError);
+            int errCode = (int)nw_error_get_error_code(recvError);
+            if (errDomain != nw_error_domain_posix || errCode != EAGAIN) {
+                ztLog([NSString stringWithFormat:@"NW recv error: domain=%d code=%d", (int)errDomain, errCode]);
             }
         }
         if (content) {
@@ -175,8 +175,8 @@ static void receiveFromListener(nw_connection_t conn) {
             if (bytes && len > 0) {
                 s_lastRecvCount++;
 
-                nw_endpoint_t remote = nw_connection_get_current_path(conn) ?
-                    nw_path_copy_effective_remote_endpoint(nw_connection_copy_current_path(conn)) : nil;
+                nw_path_t path = nw_connection_copy_current_path(conn);
+                nw_endpoint_t remote = path ? nw_path_copy_effective_remote_endpoint(path) : nil;
 
                 char addrBuf[INET6_ADDRSTRLEN] = {0};
                 uint16_t rPort = 0;
@@ -214,7 +214,6 @@ static void receiveFromListener(nw_connection_t conn) {
                     free(buf);
                 }
             }
-            dispatch_release(mapped);
         }
         if (!is_complete && s_nodeRunning) {
             receiveFromListener(conn);
@@ -300,18 +299,17 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
     }
 
     dispatch_data_t sendData = dispatch_data_create(packetData, packetLength, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-    nw_connection_send(conn, sendData, NW_CONNECTION_DEFAULT_MESSAGE_CONTENT_CONTEXT, NW_CONNECTION_FINAL_MESSAGE_ALWAYS, ^(nw_error_t error) {
-        if (error) {
-            nw_error_domain_t domain = nw_error_get_error_domain(error);
-            int code = (int)nw_error_get_error_code(error);
+    nw_connection_send(conn, sendData, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t sendError) {
+        if (sendError) {
+            nw_error_domain_t sendErrDomain = nw_error_get_error_domain(sendError);
+            int sendErrCode = (int)nw_error_get_error_code(sendError);
             s_lastSendFailCount++;
-            ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %@ domain=%d code=%d", packetLength, addrStr, (int)domain, code]);
+            ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %@ domain=%d code=%d", packetLength, addrStr, (int)sendErrDomain, sendErrCode]);
         } else {
             s_lastSendCount++;
             ztLog([NSString stringWithFormat:@"TX OK %u bytes -> %@", packetLength, addrStr]);
         }
     });
-    dispatch_release(sendData);
 
     return 0;
 }
@@ -586,7 +584,7 @@ static void nodeThreadFunc() {
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
-    nw_parameters_set_reuse_local_port(listenerParams, true);
+    nw_parameters_set_reuse_local_address(listenerParams, true);
 
     s_listener4 = nw_listener_create(listenerParams);
     if (s_listener4) {
@@ -623,7 +621,7 @@ static void nodeThreadFunc() {
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION
     );
-    nw_parameters_set_reuse_local_port(listenerParams6, true);
+    nw_parameters_set_reuse_local_address(listenerParams6, true);
 
     s_listener6 = nw_listener_create(listenerParams6);
     if (s_listener6) {

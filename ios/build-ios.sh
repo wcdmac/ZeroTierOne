@@ -63,7 +63,8 @@ fi
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
-    -force-load "$ROOT_DIR/libzerotiercore-ios.a" \
+    -Xlinker -force_load \
+    -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
     -lc++ \
     -framework UIKit \
     -framework Foundation \

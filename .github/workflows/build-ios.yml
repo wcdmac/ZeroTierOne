@@ -3,6 +3,16 @@ name: Build iOS
 on:
   push:
     branches: [ main, dev, master, ios-build ]
+    paths:
+      - 'node/**'
+      - 'include/**'
+      - 'osdep/**'
+      - 'ext/prometheus-cpp-lite-1.0/**'
+      - 'ios/**'
+      - 'make-ios.mk'
+      - 'version.h'
+      - 'objects.mk'
+      - '.github/workflows/build-ios.yml'
   workflow_dispatch:
 
 jobs:
@@ -46,21 +56,49 @@ jobs:
       run: |
         chmod +x $GITHUB_WORKSPACE/ios/build-ios.sh
         cd $GITHUB_WORKSPACE/ios
-        bash build-ios.sh 2>&1 | tee xcodebuild.log
+        bash build-ios.sh 2>&1 | tee build.log
+
+    - name: Verify app bundle
+      run: |
+        APP_PATH="$GITHUB_WORKSPACE/ios/build/ZeroTierOne.app"
+        echo "=== App bundle size ==="
+        du -sh "$APP_PATH"
+        echo "=== Executable check ==="
+        file "$APP_PATH/ZeroTierOne"
+        ls -la "$APP_PATH/ZeroTierOne"
+        echo "=== Info.plist check ==="
+        plutil -p "$APP_PATH/Info.plist" | head -10
+        echo "=== PkgInfo check ==="
+        cat "$APP_PATH/PkgInfo"
+        echo ""
+        echo "=== Full bundle listing ==="
+        find "$APP_PATH" -type f | head -30
 
     - name: Create IPA
       run: |
         APP_PATH="$GITHUB_WORKSPACE/ios/build/ZeroTierOne.app"
         if [ ! -d "$APP_PATH" ]; then
           echo "ERROR: App not found at $APP_PATH"
-          find $GITHUB_WORKSPACE/ios/build -type d
+          exit 1
+        fi
+        if [ ! -f "$APP_PATH/Info.plist" ]; then
+          echo "ERROR: Info.plist missing in app bundle!"
+          exit 1
+        fi
+        if [ ! -f "$APP_PATH/ZeroTierOne" ]; then
+          echo "ERROR: Executable missing in app bundle!"
           exit 1
         fi
         mkdir -p $GITHUB_WORKSPACE/ipa/Payload
         cp -r "$APP_PATH" $GITHUB_WORKSPACE/ipa/Payload/
         cd $GITHUB_WORKSPACE/ipa
         zip -r $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa Payload/
-        echo "IPA size: $(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa | cut -f1)"
+        IPA_SIZE=$(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa | cut -f1)
+        echo "IPA size: $IPA_SIZE"
+        if [ "$IPA_SIZE" = "4.0K" ] || [ "$IPA_SIZE" = "0B" ]; then
+          echo "ERROR: IPA is too small, something went wrong!"
+          exit 1
+        fi
 
     - name: Create artifacts
       run: |
@@ -85,7 +123,7 @@ jobs:
       if: always()
       with:
         name: build-logs
-        path: ios/xcodebuild.log
+        path: ios/build.log
         retention-days: 7
 
   release:
@@ -116,6 +154,14 @@ jobs:
         VERSION="${MAJOR}.${MINOR}.${REV}"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
+
+    - name: Delete old release if exists
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG="ios-v${{ steps.version.outputs.version }}"
+        gh release delete "$TAG" --yes 2>/dev/null || true
+        git push --delete origin "$TAG" 2>/dev/null || true
 
     - name: Create Release
       uses: softprops/action-gh-release@v2

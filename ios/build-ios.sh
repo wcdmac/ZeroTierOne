@@ -4,85 +4,136 @@ set -e
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 MIN_VERSION="15.0"
 ARCH="arm64"
-SCHEME="ZeroTierOne"
+APP_NAME="ZeroTierOne"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$PROJECT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-APP_DIR="$BUILD_DIR/$SCHEME.app"
+APP_DIR="$BUILD_DIR/$APP_NAME.app"
+OBJ_DIR="$BUILD_DIR/objs"
 
 echo "=== Building ZeroTier One iOS App ==="
 echo "SDK: $SDK"
 echo "Architecture: $ARCH"
 echo "Min iOS Version: $MIN_VERSION"
-echo "Project Dir: $PROJECT_DIR"
-echo "Root Dir: $ROOT_DIR"
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
+mkdir -p "$OBJ_DIR"
 mkdir -p "$APP_DIR"
 
-echo "=== Compiling Swift sources ==="
+COMMON_FLAGS="-target ${ARCH}-apple-ios${MIN_VERSION} -isysroot $SDK -miphoneos-version-min=$MIN_VERSION"
 
-SWIFT_SOURCES=(
-    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift"
-    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift"
-    "$PROJECT_DIR/ZeroTierOne/ViewController.swift"
-)
-
-OBJC_SOURCES=(
+echo "=== Step 1: Compile Objective-C++ bridge ==="
+clang++ \
+    $COMMON_FLAGS \
+    -std=c++17 \
+    -stdlib=libc++ \
+    -fobjc-arc \
+    -c \
+    -I"$ROOT_DIR/include" \
+    -I"$ROOT_DIR/node" \
+    -I"$ROOT_DIR/ext" \
+    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/core/include" \
+    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/simpleapi/include" \
+    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/3rdparty/http-client-lite/include" \
+    -o "$OBJ_DIR/ZeroTierBridge.o" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.mm"
-)
 
+echo "=== Step 2: Compile Swift sources to object files ==="
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
-    -O \
+    -Osize \
     -module-name ZeroTierOne \
-    -emit-module \
-    -emit-module-path "$BUILD_DIR/ZeroTierOne.swiftmodule" \
     -parse-as-library \
-    -F "$SDK/System/Library/Frameworks" \
-    -I "$BUILD_DIR" \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
-    -o "$BUILD_DIR/ZeroTierOne" \
-    "${SWIFT_SOURCES[@]}" \
-    "${OBJC_SOURCES[@]}" \
+    -emit-object \
+    -o "$OBJ_DIR" \
+    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
+    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
+    "$PROJECT_DIR/ZeroTierOne/ViewController.swift"
+
+echo "=== Step 3: Link executable ==="
+SWIFT_OBJS=$(find "$OBJ_DIR" -name "*.o" ! -name "ZeroTierBridge.o")
+swiftc \
+    -target ${ARCH}-apple-ios${MIN_VERSION} \
+    -sdk "$SDK" \
     -L "$ROOT_DIR" \
     -lzerotiercore-ios \
     -lc++ \
     -framework UIKit \
     -framework Foundation \
     -framework CoreGraphics \
-    -framework QuartzCore
+    -framework QuartzCore \
+    -framework SwiftUI \
+    -o "$APP_DIR/$APP_NAME" \
+    $SWIFT_OBJS \
+    "$OBJ_DIR/ZeroTierBridge.o"
 
-echo "=== Creating app bundle ==="
+echo "=== Step 4: Create PkgInfo ==="
+printf "APPL????" > "$APP_DIR/PkgInfo"
 
-cp "$BUILD_DIR/ZeroTierOne" "$APP_DIR/ZeroTierOne"
+echo "=== Step 5: Process Info.plist ==="
+plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
+    cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
-cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
-
-cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
-
-mkdir -p "$APP_DIR/Base.lproj"
+echo "=== Step 6: Compile storyboards ==="
 if [ -f "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" ]; then
+    ibtool \
+        --target-device iphone \
+        --target-device ipad \
+        --minimum-deployment-target $MIN_VERSION \
+        --compilation-directory "$APP_DIR/Base.lproj" \
+        --errors --warnings --notices \
+        "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/Main.storyboard" "$APP_DIR/Base.lproj/Main.storyboard"
 fi
+
 if [ -f "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" ]; then
+    ibtool \
+        --target-device iphone \
+        --target-device ipad \
+        --minimum-deployment-target $MIN_VERSION \
+        --compilation-directory "$APP_DIR/Base.lproj" \
+        --errors --warnings --notices \
+        "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Base.lproj/LaunchScreen.storyboard" "$APP_DIR/Base.lproj/LaunchScreen.storyboard"
 fi
 
+echo "=== Step 7: Copy assets and resources ==="
+cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
+
 mkdir -p "$APP_DIR/zh-Hans.lproj"
 if [ -f "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" ]; then
+    plutil -convert binary1 -o "$APP_DIR/zh-Hans.lproj/Localizable.strings" "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" "$APP_DIR/zh-Hans.lproj/Localizable.strings"
 fi
 
 mkdir -p "$APP_DIR/en.lproj"
 if [ -f "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" ]; then
+    plutil -convert binary1 -o "$APP_DIR/en.lproj/Localizable.strings" "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" "$APP_DIR/en.lproj/Localizable.strings"
 fi
 
-echo "=== Verifying app bundle ==="
-ls -la "$APP_DIR/"
-file "$APP_DIR/ZeroTierOne"
+echo "=== Step 8: Verify app bundle ==="
+echo "--- App bundle contents ---"
+find "$APP_DIR" -type f | while read f; do
+    SIZE=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "?")
+    echo "  $SIZE bytes  ${f#$APP_DIR/}"
+done
 
+echo "--- Executable info ---"
+file "$APP_DIR/$APP_NAME"
+ls -la "$APP_DIR/$APP_NAME"
+
+echo "--- Info.plist check ---"
+if [ -f "$APP_DIR/Info.plist" ]; then
+    echo "Info.plist exists: YES"
+    plutil -p "$APP_DIR/Info.plist" 2>/dev/null | head -5 || echo "(binary plist)"
+else
+    echo "Info.plist exists: NO - ERROR!"
+fi
+
+APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)
+echo "=== App bundle total size: $APP_SIZE ==="
 echo "=== Build complete: $APP_DIR ==="

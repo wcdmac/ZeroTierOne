@@ -40,7 +40,7 @@ class ViewController: UIViewController {
         nodeIdLabel = UILabel()
         nodeIdLabel.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
         nodeIdLabel.textAlignment = .center
-        nodeIdLabel.text = String(format: NSLocalizedString("NODE_ID_FORMAT", value: "Node: %@", comment: "Node ID format"), ztBridge.getNodeId())
+        nodeIdLabel.text = String(format: NSLocalizedString("NODE_ID_FORMAT", value: "Node: %@", comment: "Node ID format"), ztBridge.nodeId)
         nodeIdLabel.textColor = .secondaryLabel
         nodeIdLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(nodeIdLabel)
@@ -117,10 +117,7 @@ class ViewController: UIViewController {
             DispatchQueue.main.async {
                 self?.joinButton.isEnabled = true
                 if success {
-                    self?.statusLabel.text = NSLocalizedString("STATUS_CONNECTED", value: "Connected", comment: "Connected status")
-                    self?.statusLabel.textColor = .systemGreen
-                    self?.statusImageView.tintColor = .systemGreen
-                    self?.leaveButton.isEnabled = true
+                    self?.updateStatus()
                 } else {
                     self?.statusLabel.text = NSLocalizedString("STATUS_FAILED", value: "Connection Failed", comment: "Failed status")
                     self?.statusLabel.textColor = .systemRed
@@ -137,7 +134,7 @@ class ViewController: UIViewController {
     }
 
     private func updateStatus() {
-        if ztBridge.isConnected {
+        if ztBridge.connected {
             statusLabel.text = NSLocalizedString("STATUS_CONNECTED", value: "Connected", comment: "Connected status")
             statusLabel.textColor = .systemGreen
             statusImageView.tintColor = .systemGreen

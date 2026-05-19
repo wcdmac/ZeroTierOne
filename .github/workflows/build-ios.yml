@@ -3,16 +3,6 @@ name: Build iOS
 on:
   push:
     branches: [ main, dev, master, ios-build ]
-    paths:
-      - 'node/**'
-      - 'include/**'
-      - 'osdep/**'
-      - 'ext/prometheus-cpp-lite-1.0/**'
-      - 'ios/**'
-      - 'make-ios.mk'
-      - 'version.h'
-      - 'objects.mk'
-      - '.github/workflows/build-ios.yml'
   workflow_dispatch:
 
 jobs:
@@ -41,48 +31,29 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
 
-    - name: Fix line endings
-      run: |
-        find $GITHUB_WORKSPACE/ios -name "*.pbxproj" -o -name "*.xcscheme" -o -name "*.plist" -o -name "*.strings" -o -name "*.storyboard" | while read f; do
-          sed -i '' 's/\r$//' "$f"
-        done
-
     - name: Build ZeroTier core for iOS
       run: |
         cd $GITHUB_WORKSPACE
         make -f make-ios.mk clean 2>/dev/null || true
-        make -f make-ios.mk -j$(sysctl -n hw.ncpu) 2>&1 | tee build.log
+        make -f make-ios.mk -j$(sysctl -n hw.ncpu)
 
-    - name: Verify library
+    - name: Verify core library
       run: |
         ls -la $GITHUB_WORKSPACE/libzerotiercore-ios.a
         file $GITHUB_WORKSPACE/libzerotiercore-ios.a
 
     - name: Build iOS app (unsigned)
       run: |
+        chmod +x $GITHUB_WORKSPACE/ios/build-ios.sh
         cd $GITHUB_WORKSPACE/ios
-        xcodebuild \
-          -project ZeroTierOne.xcodeproj \
-          -scheme ZeroTierOne \
-          -sdk iphoneos \
-          -configuration Release \
-          -derivedDataPath build \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          ENABLE_BITCODE=NO \
-          DEVELOPMENT_TEAM="" \
-          IPHONEOS_DEPLOYMENT_TARGET=15.0 \
-          ARCHS="arm64" \
-          clean build 2>&1 | tee xcodebuild.log
+        bash build-ios.sh 2>&1 | tee xcodebuild.log
 
     - name: Create IPA
       run: |
-        APP_PATH=$(find $GITHUB_WORKSPACE/ios/build/Build/Products/Release-iphoneos -name "*.app" -type d | head -1)
-        echo "Found app at: $APP_PATH"
-        if [ -z "$APP_PATH" ]; then
-          echo "ERROR: App not found, searching build directory..."
-          find $GITHUB_WORKSPACE/ios/build -name "*.app" -type d
+        APP_PATH="$GITHUB_WORKSPACE/ios/build/ZeroTierOne.app"
+        if [ ! -d "$APP_PATH" ]; then
+          echo "ERROR: App not found at $APP_PATH"
+          find $GITHUB_WORKSPACE/ios/build -type d
           exit 1
         fi
         mkdir -p $GITHUB_WORKSPACE/ipa/Payload
@@ -91,14 +62,14 @@ jobs:
         zip -r $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa Payload/
         echo "IPA size: $(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa | cut -f1)"
 
-    - name: Create core library artifact
+    - name: Create artifacts
       run: |
         mkdir -p $GITHUB_WORKSPACE/artifacts
         cp $GITHUB_WORKSPACE/libzerotiercore-ios.a $GITHUB_WORKSPACE/artifacts/
         cp $GITHUB_WORKSPACE/include/ZeroTierOne.h $GITHUB_WORKSPACE/artifacts/
         cp $GITHUB_WORKSPACE/include/ZeroTierDebug.h $GITHUB_WORKSPACE/artifacts/
 
-    - name: Upload IPA artifact
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ZeroTierOne-iOS-unsigned
@@ -114,9 +85,7 @@ jobs:
       if: always()
       with:
         name: build-logs
-        path: |
-          build.log
-          ios/xcodebuild.log
+        path: ios/xcodebuild.log
         retention-days: 7
 
   release:
@@ -143,7 +112,6 @@ jobs:
       run: |
         VERSION=$(grep "ZEROTIER_ONE_VERSION_MAJOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_MINOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_REVISION" version.h | awk '{print $3}')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
@@ -160,8 +128,8 @@ jobs:
           - **核心版本**: ${{ steps.version.outputs.version }}
 
           ### 下载说明 / Download Instructions
-          - `ZeroTierOne-iOS-arm64-unsigned.ipa` - iOS应用安装包（需通过AltStore等工具安装）
-          - `libzerotiercore-ios.a` - ZeroTier核心静态库（用于自定义开发）
+          - `ZeroTierOne-iOS-arm64-unsigned.ipa` - iOS应用安装包
+          - `libzerotiercore-ios.a` - ZeroTier核心静态库
           - `ZeroTierOne.h` - 核心头文件
           - `ZeroTierDebug.h` - 调试头文件
 

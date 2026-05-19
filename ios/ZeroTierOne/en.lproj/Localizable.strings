@@ -1,0 +1,14 @@
+/* ZeroTier One - English Localization */
+
+"APP_TITLE" = "ZeroTier One";
+"STATUS_OFFLINE" = "Offline";
+"STATUS_CONNECTED" = "Connected";
+"STATUS_CONNECTING" = "Connecting...";
+"STATUS_FAILED" = "Connection Failed";
+"NODE_ID_FORMAT" = "Node: %@";
+"NETWORK_ID_PLACEHOLDER" = "Enter Network ID";
+"JOIN_NETWORK" = "Join Network";
+"LEAVE_NETWORK" = "Leave Network";
+"ERROR" = "Error";
+"ENTER_NETWORK_ID" = "Please enter a Network ID";
+"OK" = "OK";

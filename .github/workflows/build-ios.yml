@@ -1,0 +1,195 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [ main, dev, master, ios-build ]
+    paths:
+      - 'node/**'
+      - 'include/**'
+      - 'osdep/**'
+      - 'ext/arm32-neon-salsa2012-asm/**'
+      - 'ext/x64-salsa2012-asm/**'
+      - 'ext/http-parser/**'
+      - 'ios/**'
+      - 'make-ios.mk'
+      - 'version.h'
+      - 'objects.mk'
+      - '.github/workflows/build-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build_ios:
+    runs-on: macos-14
+    steps:
+    - name: Checkout (sparse)
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          node
+          include
+          osdep
+          ext/arm32-neon-salsa2012-asm
+          ext/x64-salsa2012-asm
+          ext/http-parser
+          ext/nlohmann
+          ios
+          make-ios.mk
+          version.h
+          objects.mk
+          .github/workflows/build-ios.yml
+        sparse-checkout-cone-mode: false
+
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer 2>/dev/null || true
+
+    - name: Show Xcode version
+      run: xcodebuild -version
+
+    - name: Install xcodegen
+      run: brew install xcodegen
+
+    - name: Build ZeroTier core for iOS
+      run: |
+        cd $GITHUB_WORKSPACE
+        make -f make-ios.mk clean 2>/dev/null || true
+        make -f make-ios.mk -j$(sysctl -n hw.ncpu) 2>&1 | tee build.log
+
+    - name: Verify library
+      run: |
+        ls -la $GITHUB_WORKSPACE/libzerotiercore-ios.a
+        lipo -info $GITHUB_WORKSPACE/libzerotiercore-ios.a || true
+        file $GITHUB_WORKSPACE/libzerotiercore-ios.a
+
+    - name: Generate Xcode project
+      run: |
+        cd $GITHUB_WORKSPACE/ios
+        xcodegen generate
+
+    - name: Build iOS app (unsigned)
+      run: |
+        cd $GITHUB_WORKSPACE/ios
+        xcodebuild \
+          -project ZeroTierOne.xcodeproj \
+          -scheme ZeroTierOne \
+          -sdk iphoneos \
+          -configuration Release \
+          -derivedDataPath build \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          ENABLE_BITCODE=NO \
+          DEVELOPMENT_TEAM="" \
+          IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+          ARCHS="arm64" \
+          clean build 2>&1 | tee xcodebuild.log
+
+    - name: Create IPA
+      run: |
+        APP_PATH=$(find $GITHUB_WORKSPACE/ios/build/Build/Products/Release-iphoneos -name "*.app" -type d | head -1)
+        echo "Found app at: $APP_PATH"
+        if [ -z "$APP_PATH" ]; then
+          echo "ERROR: App not found, searching build directory..."
+          find $GITHUB_WORKSPACE/ios/build -name "*.app" -type d
+          exit 1
+        fi
+        mkdir -p $GITHUB_WORKSPACE/ipa/Payload
+        cp -r "$APP_PATH" $GITHUB_WORKSPACE/ipa/Payload/
+        cd $GITHUB_WORKSPACE/ipa
+        zip -r $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa Payload/
+        echo "IPA size: $(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa | cut -f1)"
+
+    - name: Create core library artifact
+      run: |
+        mkdir -p $GITHUB_WORKSPACE/artifacts
+        cp $GITHUB_WORKSPACE/libzerotiercore-ios.a $GITHUB_WORKSPACE/artifacts/
+        cp $GITHUB_WORKSPACE/include/ZeroTierOne.h $GITHUB_WORKSPACE/artifacts/
+        cp $GITHUB_WORKSPACE/include/ZeroTierDebug.h $GITHUB_WORKSPACE/artifacts/
+
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ZeroTierOne-iOS-unsigned
+        path: |
+          ZeroTierOne-iOS-arm64-unsigned.ipa
+          artifacts/libzerotiercore-ios.a
+          artifacts/ZeroTierOne.h
+          artifacts/ZeroTierDebug.h
+        retention-days: 30
+
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-logs
+        path: |
+          build.log
+          ios/xcodebuild.log
+        retention-days: 7
+
+  release:
+    needs: build_ios
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          version.h
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ZeroTierOne-iOS-unsigned
+        path: ./release-assets
+
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(grep "ZEROTIER_ONE_VERSION_MAJOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_MINOR" version.h | awk '{print $3}').$(grep "ZEROTIER_ONE_VERSION_REVISION" version.h | awk '{print $3}')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ios-v${{ steps.version.outputs.version }}
+        name: "ZeroTier One iOS v${{ steps.version.outputs.version }} (Unsigned)"
+        body: |
+          ## ZeroTier One iOS v${{ steps.version.outputs.version }} (Unsigned Build)
+
+          ### 构建信息 / Build Info
+          - **平台**: iOS (arm64)
+          - **最低支持版本**: iOS 15.0
+          - **编译方式**: 无签名编译 (Unsigned)
+          - **核心版本**: ${{ steps.version.outputs.version }}
+
+          ### 下载说明 / Download Instructions
+          - `ZeroTierOne-iOS-arm64-unsigned.ipa` - iOS应用安装包（需通过AltStore等工具安装）
+          - `libzerotiercore-ios.a` - ZeroTier核心静态库（用于自定义开发）
+          - `ZeroTierOne.h` - 核心头文件
+          - `ZeroTierDebug.h` - 调试头文件
+
+          ### 安装说明 / Installation
+          此IPA为未签名版本，需要通过以下方式安装：
+          1. 使用 AltStore / Sideloadly 等工具签名安装
+          2. 越狱设备可直接安装
+          3. 企业证书签名后分发
+
+          ### 语言支持 / Language Support
+          - English
+          - 简体中文 (Simplified Chinese)
+
+          ### 兼容性 / Compatibility
+          - 最低支持 iOS 15.0
+          - 支持 iPhone 和 iPad
+          - 支持 arm64 架构
+        files: |
+          ./release-assets/ZeroTierOne-iOS-arm64-unsigned.ipa
+          ./release-assets/libzerotiercore-ios.a
+          ./release-assets/ZeroTierOne.h
+          ./release-assets/ZeroTierDebug.h
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

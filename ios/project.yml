@@ -1,0 +1,57 @@
+name: ZeroTierOne
+options:
+  bundleIdPrefix: com.zerotier
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    ENABLE_BITCODE: NO
+    DEVELOPMENT_TEAM: ""
+    PRODUCT_BUNDLE_IDENTIFIER: com.zerotier.ZeroTierOne
+    MARKETING_VERSION: "1.16.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  ZeroTierOne:
+    type: application
+    platform: iOS
+    sources:
+      - path: ZeroTierOne
+        excludes:
+          - "**/*.xcodeproj"
+          - "**/*.xcworkspace"
+    settings:
+      base:
+        INFOPLIST_FILE: ZeroTierOne/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ZeroTierOne/ZeroTierOne.entitlements
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        ENABLE_BITCODE: NO
+        DEVELOPMENT_TEAM: ""
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        SWIFT_VERSION: "5.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerotier.ZeroTierOne
+        PRODUCT_NAME: ZeroTierOne
+        TARGETED_DEVICE_FAMILY: "1,2"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../../include"
+          - "$(SRCROOT)/../../node"
+          - "$(SRCROOT)/../../ext"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/.."
+        OTHER_LDFLAGS:
+          - "-lzerotiercore-ios"
+          - "-lc++"
+        CLANG_ENABLE_MODULES: YES
+        SWIFT_OBJC_BRIDGING_HEADER: ZeroTierOne/ZeroTierOne-Bridging-Header.h
+    dependencies:
+      - framework: ../../libzerotiercore-ios.a
+    entitlements:
+      path: ZeroTierOne/ZeroTierOne.entitlements

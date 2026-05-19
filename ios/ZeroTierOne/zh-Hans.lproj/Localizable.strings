@@ -1,0 +1,14 @@
+/* ZeroTier One - Simplified Chinese Localization */
+
+"APP_TITLE" = "ZeroTier One";
+"STATUS_OFFLINE" = "离线";
+"STATUS_CONNECTED" = "已连接";
+"STATUS_CONNECTING" = "连接中...";
+"STATUS_FAILED" = "连接失败";
+"NODE_ID_FORMAT" = "节点: %@";
+"NETWORK_ID_PLACEHOLDER" = "输入网络ID";
+"JOIN_NETWORK" = "加入网络";
+"LEAVE_NETWORK" = "离开网络";
+"ERROR" = "错误";
+"ENTER_NETWORK_ID" = "请输入网络ID";
+"OK" = "确定";

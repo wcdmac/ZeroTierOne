@@ -77,12 +77,9 @@ swiftc \
 
 echo "=== Step 3: Link executable ==="
 SWIFT_OBJS="$OBJ_DIR/swift/AppDelegate.o $OBJ_DIR/swift/SceneDelegate.o $OBJ_DIR/swift/ViewController.o"
-clang++ \
+swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -isysroot "$SDK" \
-    -miphoneos-version-min=$MIN_VERSION \
-    -std=c++17 \
-    -stdlib=libc++ \
+    -sdk "$SDK" \
     -L "$ROOT_DIR" \
     -lzerotiercore-ios \
     -lc++ \

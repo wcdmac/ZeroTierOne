@@ -10,15 +10,9 @@ IOS_VERSION_MIN=15.0
 ARCH_FLAGS=-arch arm64
 SYSROOT=$(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 
-ZT_VERSION_MAJOR=$(shell cat version.h | grep -F VERSION_MAJOR | cut -d ' ' -f 3)
-ZT_VERSION_MINOR=$(shell cat version.h | grep -F VERSION_MINOR | cut -d ' ' -f 3)
-ZT_VERSION_REV=$(shell cat version.h | grep -F VERSION_REVISION | cut -d ' ' -f 3)
-
 DEFS+=-DZT_BUILD_PLATFORM=5 -DZT_BUILD_ARCHITECTURE=2
 
 include objects.mk
-
-CORE_OBJS+=ext/prometheus-cpp-lite-1.0/simpleapi/src/simpleapi.o
 
 CFLAGS=-O3 -fstack-protector-strong $(ARCH_FLAGS) -isysroot $(SYSROOT) -miphoneos-version-min=$(IOS_VERSION_MIN) -flto -fPIE -DNDEBUG -Wall -Wno-unused-private-field $(INCLUDES) $(DEFS)
 CXXFLAGS=$(CFLAGS) -std=c++17 -stdlib=libc++
@@ -38,6 +32,6 @@ libzerotiercore-ios.a: $(CORE_OBJS)
 	ranlib libzerotiercore-ios.a
 
 clean:
-	rm -f *.a *.o node/*.o osdep/*.o ext/prometheus-cpp-lite-1.0/simpleapi/src/*.o
+	rm -f *.a *.o node/*.o osdep/*.o
 
 FORCE:

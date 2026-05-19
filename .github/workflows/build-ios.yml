@@ -32,6 +32,7 @@ jobs:
           ext/x64-salsa2012-asm
           ext/http-parser
           ext/nlohmann
+          ext/prometheus-cpp-lite-1.0
           ios
           make-ios.mk
           version.h

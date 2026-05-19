@@ -2,7 +2,7 @@ CC=clang
 CXX=clang++
 TOPDIR=$(shell pwd)
 
-INCLUDES=-I$(TOPDIR) -isystem $(TOPDIR)/ext -I$(TOPDIR)/include
+INCLUDES=-I$(TOPDIR) -isystem $(TOPDIR)/ext -I$(TOPDIR)/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/core/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/simpleapi/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/3rdparty/http-client-lite/include
 DEFS=-DZT_BUILD_PLATFORM=5 -DZT_BUILD_ARCHITECTURE=2
 LIBS=
 
@@ -21,6 +21,7 @@ include objects.mk
 override DEFS+=-DZT_NO_TYPE_PUNNING -DZT_USE_ARM32_NEON_ASM_SALSA2012
 
 CORE_OBJS+=ext/arm32-neon-salsa2012-asm/salsa2012.o
+CORE_OBJS+=ext/prometheus-cpp-lite-1.0/simpleapi/src/simpleapi.o
 
 CFLAGS=-O3 -fstack-protector-strong $(ARCH_FLAGS) -isysroot $(SYSROOT) -miphoneos-version-min=$(IOS_VERSION_MIN) -flto -fPIE -DNDEBUG -Wall -Wno-unused-private-field $(INCLUDES) $(DEFS)
 CXXFLAGS=$(CFLAGS) -std=c++17 -stdlib=libc++
@@ -43,6 +44,6 @@ ext/arm32-neon-salsa2012-asm/salsa2012.o:
 	as -arch arm64 -isysroot $(SYSROOT) -o ext/arm32-neon-salsa2012-asm/salsa2012.o ext/arm32-neon-salsa2012-asm/salsa2012.s
 
 clean:
-	rm -f *.a *.o node/*.o osdep/*.o ext/arm32-neon-salsa2012-asm/*.o ext/http-parser/*.o ext/x64-salsa2012-asm/*.o
+	rm -f *.a *.o node/*.o osdep/*.o ext/arm32-neon-salsa2012-asm/*.o ext/http-parser/*.o ext/x64-salsa2012-asm/*.o ext/prometheus-cpp-lite-1.0/simpleapi/src/*.o
 
 FORCE:

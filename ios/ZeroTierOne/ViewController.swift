@@ -50,6 +50,16 @@ class NetworkViewController: UIViewController {
         super.viewDidLoad()
         title = NSLocalizedString("NETWORK_TITLE", value: "ZeroTier One", comment: "Network page title")
         setupUI()
+
+        ztBridge.onOnlineStatusChange = { [weak self] online in
+            self?.updateStatus()
+        }
+        ztBridge.onStatusChange = { [weak self] connected in
+            self?.updateStatus()
+            self?.networkListView.reloadData()
+        }
+
+        ztBridge.startNode()
         updateStatus()
     }
 
@@ -194,17 +204,24 @@ class NetworkViewController: UIViewController {
     }
 
     private func updateStatus() {
+        let online = ztBridge.isNodeOnline()
         if ztBridge.connected {
             statusLabel.text = NSLocalizedString("STATUS_CONNECTED", value: "Connected", comment: "Connected status")
             statusLabel.textColor = .systemGreen
             statusImageView.tintColor = .systemGreen
             leaveButton.isEnabled = true
+        } else if online {
+            statusLabel.text = NSLocalizedString("STATUS_ONLINE", value: "Online (Not Connected)", comment: "Online but not connected")
+            statusLabel.textColor = .systemOrange
+            statusImageView.tintColor = .systemOrange
+            leaveButton.isEnabled = false
         } else {
             statusLabel.text = NSLocalizedString("STATUS_OFFLINE", value: "Offline", comment: "Offline status")
             statusLabel.textColor = .secondaryLabel
             statusImageView.tintColor = .systemGray
             leaveButton.isEnabled = false
         }
+        nodeIdLabel.text = String(format: NSLocalizedString("NODE_ID_FORMAT", value: "Node: %@", comment: "Node ID format"), ztBridge.nodeId())
     }
 
     private func showAlert(title: String, message: String) {

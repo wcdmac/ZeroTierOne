@@ -6,8 +6,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, assign) BOOL connected;
 @property (nonatomic, copy, nullable) NSString *currentNetworkId;
+@property (nonatomic, copy, nullable) void (^onStatusChange)(BOOL connected);
+@property (nonatomic, copy, nullable) void (^onOnlineStatusChange)(BOOL online);
 
 - (NSString *)nodeId;
+- (BOOL)isNodeOnline;
+- (BOOL)startNode;
+- (void)stopNode;
 - (void)joinNetwork:(NSString *)networkId completion:(void (^)(BOOL success))completion;
 - (void)leaveNetwork;
 - (NSArray<NSString *> *)savedNetworks;

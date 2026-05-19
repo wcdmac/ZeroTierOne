@@ -6,6 +6,7 @@
 "NETWORK_TITLE" = "ZeroTier One";
 "STATUS_OFFLINE" = "离线";
 "STATUS_CONNECTED" = "已连接";
+"STATUS_ONLINE" = "在线（未连接网络）";
 "STATUS_CONNECTING" = "连接中...";
 "STATUS_FAILED" = "连接失败";
 "NODE_ID_FORMAT" = "节点: %@";

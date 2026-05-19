@@ -50,32 +50,12 @@ swiftc \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
     -emit-object \
     -o "$OBJ_DIR/swift/AppDelegate.o" \
-    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift"
-
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
-    -Osize \
-    -module-name ZeroTierOne \
-    -parse-as-library \
-    -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
-    -emit-object \
-    -o "$OBJ_DIR/swift/SceneDelegate.o" \
-    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift"
-
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
-    -Osize \
-    -module-name ZeroTierOne \
-    -parse-as-library \
-    -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
-    -emit-object \
-    -o "$OBJ_DIR/swift/ViewController.o" \
+    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
+    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
     "$PROJECT_DIR/ZeroTierOne/ViewController.swift"
 
 echo "=== Step 3: Link executable ==="
-SWIFT_OBJS="$OBJ_DIR/swift/AppDelegate.o $OBJ_DIR/swift/SceneDelegate.o $OBJ_DIR/swift/ViewController.o"
+SWIFT_OBJS="$OBJ_DIR/swift/AppDelegate.o"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \

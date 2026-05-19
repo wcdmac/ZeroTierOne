@@ -3,8 +3,9 @@ options:
   bundleIdPrefix: com.zerotier
   deploymentTarget:
     iOS: "15.0"
-  xcodeVersion: "15.0"
+  minimumXcodeVersion: "15.0"
   generateEmptyDirectories: true
+  formatVersion: 60
 settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: "15.0"

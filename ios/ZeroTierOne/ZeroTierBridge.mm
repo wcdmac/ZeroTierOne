@@ -21,6 +21,7 @@ static volatile int64_t s_nextBackgroundTaskDeadline = 0;
 
 static NSString *s_dataPath = nil;
 static int s_udpSock = -1;
+static int s_udpSock6 = -1;
 
 static void statePutFunction(ZT_Node *node, void *uptr, void *tptr,
                               enum ZT_StateObjectType type, const uint64_t id[2],
@@ -107,14 +108,12 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
                                    const struct sockaddr_storage *remoteAddress,
                                    const void *packetData, unsigned int packetLength,
                                    unsigned int ttl) {
-    if (s_udpSock < 0) return -1;
-
     ssize_t result = -1;
-    if (remoteAddress->ss_family == AF_INET) {
+    if (remoteAddress->ss_family == AF_INET && s_udpSock >= 0) {
         result = sendto(s_udpSock, packetData, packetLength, 0,
                         (const struct sockaddr *)remoteAddress, sizeof(struct sockaddr_in));
-    } else if (remoteAddress->ss_family == AF_INET6) {
-        result = sendto(s_udpSock, packetData, packetLength, 0,
+    } else if (remoteAddress->ss_family == AF_INET6 && s_udpSock6 >= 0) {
+        result = sendto(s_udpSock6, packetData, packetLength, 0,
                         (const struct sockaddr *)remoteAddress, sizeof(struct sockaddr_in6));
     }
     return (result >= 0) ? 0 : -1;
@@ -191,11 +190,29 @@ static void nodeThreadFunc() {
         tv.tv_usec = 100000;
         fd_set readfds;
         FD_ZERO(&readfds);
+        int maxFd = 0;
         if (s_udpSock >= 0) {
             FD_SET(s_udpSock, &readfds);
-            select(s_udpSock + 1, &readfds, nullptr, nullptr, &tv);
-            if (FD_ISSET(s_udpSock, &readfds)) {
+            maxFd = (s_udpSock > maxFd) ? s_udpSock : maxFd;
+        }
+        if (s_udpSock6 >= 0) {
+            FD_SET(s_udpSock6, &readfds);
+            maxFd = (s_udpSock6 > maxFd) ? s_udpSock6 : maxFd;
+        }
+        if (maxFd > 0) {
+            select(maxFd + 1, &readfds, nullptr, nullptr, &tv);
+            if (s_udpSock >= 0 && FD_ISSET(s_udpSock, &readfds)) {
                 ssize_t n = recvfrom(s_udpSock, buf, sizeof(buf), 0,
+                                     (struct sockaddr *)&fromAddr, &fromLen);
+                if (n > 0) {
+                    std::lock_guard<std::mutex> lock(s_nodeMutex);
+                    if (s_node) {
+                        ZT_Node_processWirePacket(s_node, nullptr, now, 0, &fromAddr, buf, (unsigned int)n, &s_nextBackgroundTaskDeadline);
+                    }
+                }
+            }
+            if (s_udpSock6 >= 0 && FD_ISSET(s_udpSock6, &readfds)) {
+                ssize_t n = recvfrom(s_udpSock6, buf, sizeof(buf), 0,
                                      (struct sockaddr *)&fromAddr, &fromLen);
                 if (n > 0) {
                     std::lock_guard<std::mutex> lock(s_nodeMutex);

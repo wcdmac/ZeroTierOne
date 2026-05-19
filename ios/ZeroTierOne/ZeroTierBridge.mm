@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <vector>
+#include <map>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -18,6 +19,8 @@
 #include <node/Identity.hpp>
 #include <node/Utils.hpp>
 
+#import <Network/Network.h>
+
 static ZeroTierBridge *s_sharedBridge = nil;
 static std::mutex s_nodeMutex;
 static ZT_Node *s_node = nullptr;
@@ -26,13 +29,18 @@ static std::atomic<bool> s_nodeOnline(false);
 static std::thread *s_nodeThread = nullptr;
 static volatile int64_t s_nextBackgroundTaskDeadline = 0;
 static NSString *s_dataPath = nil;
-static int s_udpSock4 = -1;
-static int s_udpSock6 = -1;
 static NSMutableArray<NSString *> *s_logEntries = nil;
 static std::mutex s_logMutex;
 static std::atomic<int64_t> s_lastSendCount(0);
 static std::atomic<int64_t> s_lastRecvCount(0);
 static std::atomic<int64_t> s_lastSendFailCount(0);
+
+static nw_listener_t s_listener4 = nil;
+static nw_listener_t s_listener6 = nil;
+static int s_localPort4 = 0;
+static int s_localPort6 = 0;
+static std::mutex s_connMutex;
+static std::map<uint64_t, nw_connection_t> s_connections;
 
 static void ztLog(NSString *msg) {
     NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
@@ -51,6 +59,167 @@ static void ztLog(NSString *msg) {
             if (s_sharedBridge.onLogUpdate) s_sharedBridge.onLogUpdate();
         });
     }
+}
+
+static NSString *sockAddrToString(const struct sockaddr_storage *addr) {
+    char buf[INET6_ADDRSTRLEN] = {0};
+    uint16_t port = 0;
+    if (addr->ss_family == AF_INET) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
+        inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
+        port = ntohs(sin->sin_port);
+    } else if (addr->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)addr;
+        inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
+        port = ntohs(sin6->sin6_port);
+    }
+    return [NSString stringWithFormat:@"%s:%u", buf, port];
+}
+
+static uint64_t addrKey(const struct sockaddr_storage *addr) {
+    if (addr->ss_family == AF_INET) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
+        return ((uint64_t)sin->sin_addr.s_addr << 16) | sin->sin_port;
+    } else if (addr->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)addr;
+        uint64_t h = 0;
+        for (int i = 0; i < 16; i++) h = h * 31 + sin6->sin6_addr.s6_addr[i];
+        return h ^ sin6->sin6_port;
+    }
+    return 0;
+}
+
+static nw_connection_t getOrCreateConnection(const struct sockaddr_storage *remoteAddr) {
+    uint64_t key = addrKey(remoteAddr);
+    {
+        std::lock_guard<std::mutex> lock(s_connMutex);
+        auto it = s_connections.find(key);
+        if (it != s_connections.end()) {
+            return it->second;
+        }
+    }
+
+    NSString *hostStr = nil;
+    uint16_t port = 0;
+    bool isV6 = false;
+
+    if (remoteAddr->ss_family == AF_INET) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)remoteAddr;
+        char buf[INET6_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
+        hostStr = [NSString stringWithUTF8String:buf];
+        port = ntohs(sin->sin_port);
+    } else if (remoteAddr->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)remoteAddr;
+        char buf[INET6_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
+        hostStr = [NSString stringWithUTF8String:buf];
+        port = ntohs(sin6->sin6_port);
+        isV6 = true;
+    } else {
+        return nil;
+    }
+
+    nw_endpoint_t remoteEndpoint = nw_endpoint_create_host([hostStr UTF8String],
+                                                            [NSString stringWithFormat:@"%u", port].UTF8String);
+    nw_parameters_t params = nw_parameters_create_secure_udp(
+        NW_PARAMETERS_DISABLE_PROTOCOL,
+        NW_PARAMETERS_DEFAULT_CONFIGURATION
+    );
+    nw_parameters_set_reuse_local_port(params, true);
+
+    if (isV6 && s_localPort6 > 0) {
+        char addr6Str[INET6_ADDRSTRLEN] = "::";
+        nw_endpoint_t localEndpoint = nw_endpoint_create_host(addr6Str,
+                                                               [NSString stringWithFormat:@"%d", s_localPort6].UTF8String);
+        nw_parameters_set_local_endpoint(params, localEndpoint);
+    } else if (!isV6 && s_localPort4 > 0) {
+        char addr4Str[INET_ADDRSTRLEN] = "0.0.0.0";
+        nw_endpoint_t localEndpoint = nw_endpoint_create_host(addr4Str,
+                                                               [NSString stringWithFormat:@"%d", s_localPort4].UTF8String);
+        nw_parameters_set_local_endpoint(params, localEndpoint);
+    }
+
+    nw_connection_t conn = nw_connection_create(remoteEndpoint, params);
+    if (!conn) {
+        ztLog([NSString stringWithFormat:@"NW: failed to create connection to %@:%u", hostStr, port]);
+        return nil;
+    }
+
+    nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+    nw_connection_start(conn);
+
+    {
+        std::lock_guard<std::mutex> lock(s_connMutex);
+        s_connections[key] = conn;
+    }
+
+    ztLog([NSString stringWithFormat:@"NW: created connection to %@:%u (v%s)", hostStr, port, isV6 ? "6" : "4"]);
+    return conn;
+}
+
+static void receiveFromListener(nw_connection_t conn) {
+    nw_connection_receive(conn, 1, ZT_MAX_PHYSMTU, ^(dispatch_data_t content, nw_content_context_t context,
+                                                        bool is_complete, nw_error_t error) {
+        if (error) {
+            nw_error_domain_t domain = nw_error_get_error_domain(error);
+            int code = (int)nw_error_get_error_code(error);
+            if (domain != nw_error_domain_posix || code != EAGAIN) {
+                ztLog([NSString stringWithFormat:@"NW recv error: domain=%d code=%d", (int)domain, code]);
+            }
+        }
+        if (content) {
+            const uint8_t *bytes = NULL;
+            size_t len = 0;
+            dispatch_data_t mapped = dispatch_data_create_map(content, (const void **)&bytes, &len);
+            if (bytes && len > 0) {
+                s_lastRecvCount++;
+
+                nw_endpoint_t remote = nw_connection_get_current_path(conn) ?
+                    nw_path_copy_effective_remote_endpoint(nw_connection_copy_current_path(conn)) : nil;
+
+                char addrBuf[INET6_ADDRSTRLEN] = {0};
+                uint16_t rPort = 0;
+                if (remote) {
+                    const struct sockaddr *sa = nw_endpoint_get_address(remote);
+                    if (sa && sa->sa_family == AF_INET) {
+                        const struct sockaddr_in *sin = (const struct sockaddr_in *)sa;
+                        inet_ntop(AF_INET, &sin->sin_addr, addrBuf, sizeof(addrBuf));
+                        rPort = ntohs(sin->sin_port);
+                    } else if (sa && sa->sa_family == AF_INET6) {
+                        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)sa;
+                        inet_ntop(AF_INET6, &sin6->sin6_addr, addrBuf, sizeof(addrBuf));
+                        rPort = ntohs(sin6->sin6_port);
+                    }
+                }
+
+                ztLog([NSString stringWithFormat:@"RX %zu bytes from %s:%u", len, addrBuf, rPort]);
+
+                int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
+                int64_t localSock = (remote && nw_endpoint_get_address(remote) &&
+                                     nw_endpoint_get_address(remote)->sa_family == AF_INET6) ? s_localPort6 : s_localPort4;
+
+                struct sockaddr_storage fromAddr;
+                memset(&fromAddr, 0, sizeof(fromAddr));
+                if (remote) {
+                    const struct sockaddr *sa = nw_endpoint_get_address(remote);
+                    if (sa) memcpy(&fromAddr, sa, sa->sa_len);
+                }
+
+                std::lock_guard<std::mutex> lock(s_nodeMutex);
+                if (s_node && fromAddr.ss_family != 0) {
+                    uint8_t *buf = (uint8_t *)malloc(len);
+                    memcpy(buf, bytes, len);
+                    ZT_Node_processWirePacket(s_node, nullptr, now, localSock, &fromAddr, buf, (unsigned int)len, &s_nextBackgroundTaskDeadline);
+                    free(buf);
+                }
+            }
+            dispatch_release(mapped);
+        }
+        if (!is_complete && s_nodeRunning) {
+            receiveFromListener(conn);
+        }
+    });
 }
 
 static void statePutFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -121,35 +290,30 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
                                    const struct sockaddr_storage *remoteAddress,
                                    const void *packetData, unsigned int packetLength,
                                    unsigned int ttl) {
-    ssize_t result = -1;
-    char addrStr[INET6_ADDRSTRLEN] = {0};
-    uint16_t port = 0;
+    NSString *addrStr = sockAddrToString(remoteAddress);
 
-    if (remoteAddress->ss_family == AF_INET && s_udpSock4 >= 0) {
-        const struct sockaddr_in *sin = (const struct sockaddr_in *)remoteAddress;
-        inet_ntop(AF_INET, &sin->sin_addr, addrStr, sizeof(addrStr));
-        port = ntohs(sin->sin_port);
-        result = sendto(s_udpSock4, packetData, packetLength, 0,
-                        (const struct sockaddr *)remoteAddress, sizeof(struct sockaddr_in));
-    } else if (remoteAddress->ss_family == AF_INET6 && s_udpSock6 >= 0) {
-        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)remoteAddress;
-        inet_ntop(AF_INET6, &sin6->sin6_addr, addrStr, sizeof(addrStr));
-        port = ntohs(sin6->sin6_port);
-        result = sendto(s_udpSock6, packetData, packetLength, 0,
-                        (const struct sockaddr *)remoteAddress, sizeof(struct sockaddr_in6));
-    } else {
-        ztLog([NSString stringWithFormat:@"TX DROP: no socket for family %d", remoteAddress->ss_family]);
+    nw_connection_t conn = getOrCreateConnection(remoteAddress);
+    if (!conn) {
+        s_lastSendFailCount++;
+        ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %@ (no NW connection)", packetLength, addrStr]);
         return -1;
     }
 
-    if (result >= 0) {
-        s_lastSendCount++;
-        ztLog([NSString stringWithFormat:@"TX %u bytes -> %s:%u (sock=%lld)", packetLength, addrStr, port, localSocket]);
-    } else {
-        s_lastSendFailCount++;
-        ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %s:%u errno=%d (%s)", packetLength, addrStr, port, errno, strerror(errno)]);
-    }
-    return (result >= 0) ? 0 : -1;
+    dispatch_data_t sendData = dispatch_data_create(packetData, packetLength, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+    nw_connection_send(conn, sendData, NW_CONNECTION_DEFAULT_MESSAGE_CONTENT_CONTEXT, NW_CONNECTION_FINAL_MESSAGE_ALWAYS, ^(nw_error_t error) {
+        if (error) {
+            nw_error_domain_t domain = nw_error_get_error_domain(error);
+            int code = (int)nw_error_get_error_code(error);
+            s_lastSendFailCount++;
+            ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %@ domain=%d code=%d", packetLength, addrStr, (int)domain, code]);
+        } else {
+            s_lastSendCount++;
+            ztLog([NSString stringWithFormat:@"TX OK %u bytes -> %@", packetLength, addrStr]);
+        }
+    });
+    dispatch_release(sendData);
+
+    return 0;
 }
 
 static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -220,10 +384,6 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
         case ZT_EVENT_FATAL_ERROR_IDENTITY_COLLISION:
             ztLog(@"FATAL ERROR: Identity collision! Another node has the same address.");
             break;
-        case ZT_EVENT_TRACE: {
-            ztLog(@"TRACE event received");
-            break;
-        }
         case ZT_EVENT_REMOTE_TRACE: {
             const ZT_RemoteTrace *rt = (const ZT_RemoteTrace *)metaData;
             if (rt) {
@@ -243,8 +403,7 @@ static void logNodeStatus() {
     ZT_Node_status(s_node, &status);
     char addrBuf[11] = {0};
     ZeroTier::Address(status.address).toString(addrBuf);
-    ztLog([NSString stringWithFormat:@"STATUS: addr=%s online=%d pubId=%p secId=%p",
-           addrBuf, status.online, status.publicIdentity, status.secretIdentity]);
+    ztLog([NSString stringWithFormat:@"STATUS: addr=%s online=%d", addrBuf, status.online]);
 
     ZT_PeerList *pl = ZT_Node_peers(s_node);
     if (pl) {
@@ -257,20 +416,8 @@ static void logNodeStatus() {
                    pAddr, p->latency, p->pathCount,
                    p->versionMajor, p->versionMinor, p->versionRev]);
             for (unsigned int j = 0; j < p->pathCount && j < 4; j++) {
-                char pathAddr[INET6_ADDRSTRLEN] = {0};
-                if (p->paths[j].address.ss_family == AF_INET) {
-                    const struct sockaddr_in *sin = (const struct sockaddr_in *)&p->paths[j].address;
-                    inet_ntop(AF_INET, &sin->sin_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: %s:%u pref=%d lastSend=%llu lastRecv=%llu",
-                           pathAddr, ntohs(sin->sin_port), p->paths[j].preferred,
-                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
-                } else if (p->paths[j].address.ss_family == AF_INET6) {
-                    const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&p->paths[j].address;
-                    inet_ntop(AF_INET6, &sin6->sin6_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: [%s]:%u pref=%d lastSend=%llu lastRecv=%llu",
-                           pathAddr, ntohs(sin6->sin6_port), p->paths[j].preferred,
-                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
-                }
+                ztLog([NSString stringWithFormat:@"    PATH: %@ pref=%d",
+                       sockAddrToString(&p->paths[j].address), p->paths[j].preferred]);
             }
         }
         ZT_Node_freeQueryResult(s_node, pl);
@@ -299,7 +446,7 @@ static void nodeThreadFunc() {
                     ztLog([NSString stringWithFormat:@"processBackgroundTasks error: %d", (int)bgRc]);
                 }
                 if (bgTaskCount % 300 == 0) {
-                    ztLog([NSString stringWithFormat:@"BG task #%d running, deadline=%lld", bgTaskCount, (long long)s_nextBackgroundTaskDeadline]);
+                    ztLog([NSString stringWithFormat:@"BG task #%d running", bgTaskCount]);
                 }
             }
         }
@@ -309,72 +456,12 @@ static void nodeThreadFunc() {
             logNodeStatus();
         }
 
-        uint8_t buf[ZT_MAX_PHYSMTU];
-        struct sockaddr_storage fromAddr;
-        socklen_t fromLen = sizeof(fromAddr);
+        int64_t sleepUntil = s_nextBackgroundTaskDeadline;
+        int64_t sleepMs = (sleepUntil > 0 && sleepUntil > now) ? (sleepUntil - now) : 100;
+        if (sleepMs > 500) sleepMs = 500;
+        if (sleepMs < 10) sleepMs = 10;
 
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000;
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        int maxFd = 0;
-        if (s_udpSock4 >= 0) { FD_SET(s_udpSock4, &readfds); maxFd = (s_udpSock4 > maxFd) ? s_udpSock4 : maxFd; }
-        if (s_udpSock6 >= 0) { FD_SET(s_udpSock6, &readfds); maxFd = (s_udpSock6 > maxFd) ? s_udpSock6 : maxFd; }
-
-        if (maxFd > 0) {
-            int selRc = select(maxFd + 1, &readfds, nullptr, nullptr, &tv);
-            if (selRc < 0) {
-                ztLog([NSString stringWithFormat:@"select() error: %d (%s)", errno, strerror(errno)]);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                continue;
-            }
-
-            if (s_udpSock4 >= 0 && FD_ISSET(s_udpSock4, &readfds)) {
-                fromLen = sizeof(fromAddr);
-                ssize_t n = recvfrom(s_udpSock4, buf, sizeof(buf), 0, (struct sockaddr *)&fromAddr, &fromLen);
-                if (n > 0) {
-                    s_lastRecvCount++;
-                    char rAddr[INET6_ADDRSTRLEN] = {0};
-                    uint16_t rPort = 0;
-                    if (fromAddr.ss_family == AF_INET) {
-                        const struct sockaddr_in *sin = (const struct sockaddr_in *)&fromAddr;
-                        inet_ntop(AF_INET, &sin->sin_addr, rAddr, sizeof(rAddr));
-                        rPort = ntohs(sin->sin_port);
-                    }
-                    ztLog([NSString stringWithFormat:@"RX4 %zd bytes from %s:%u", n, rAddr, rPort]);
-                    std::lock_guard<std::mutex> lock(s_nodeMutex);
-                    if (s_node) {
-                        ZT_Node_processWirePacket(s_node, nullptr, now, s_udpSock4, &fromAddr, buf, (unsigned int)n, &s_nextBackgroundTaskDeadline);
-                    }
-                } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ztLog([NSString stringWithFormat:@"recvfrom IPv4 error: %d (%s)", errno, strerror(errno)]);
-                }
-            }
-            if (s_udpSock6 >= 0 && FD_ISSET(s_udpSock6, &readfds)) {
-                fromLen = sizeof(fromAddr);
-                ssize_t n = recvfrom(s_udpSock6, buf, sizeof(buf), 0, (struct sockaddr *)&fromAddr, &fromLen);
-                if (n > 0) {
-                    s_lastRecvCount++;
-                    char rAddr[INET6_ADDRSTRLEN] = {0};
-                    uint16_t rPort = 0;
-                    if (fromAddr.ss_family == AF_INET6) {
-                        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&fromAddr;
-                        inet_ntop(AF_INET6, &sin6->sin6_addr, rAddr, sizeof(rAddr));
-                        rPort = ntohs(sin6->sin6_port);
-                    }
-                    ztLog([NSString stringWithFormat:@"RX6 %zd bytes from %s:%u", n, rAddr, rPort]);
-                    std::lock_guard<std::mutex> lock(s_nodeMutex);
-                    if (s_node) {
-                        ZT_Node_processWirePacket(s_node, nullptr, now, s_udpSock6, &fromAddr, buf, (unsigned int)n, &s_nextBackgroundTaskDeadline);
-                    }
-                } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ztLog([NSString stringWithFormat:@"recvfrom IPv6 error: %d (%s)", errno, strerror(errno)]);
-                }
-            }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     }
 
     ztLog(@"Node thread stopped");
@@ -493,64 +580,91 @@ static void nodeThreadFunc() {
         return YES;
     }
 
-    ztLog(@"Starting ZeroTier node...");
+    ztLog(@"Starting ZeroTier node (NWConnection mode)...");
 
-    s_udpSock4 = socket(AF_INET, SOCK_DGRAM, 0);
-    if (s_udpSock4 >= 0) {
-        int flags = fcntl(s_udpSock4, F_GETFL, 0);
-        fcntl(s_udpSock4, F_SETFL, flags | O_NONBLOCK);
-        int val = 1;
-        setsockopt(s_udpSock4, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    nw_parameters_t listenerParams = nw_parameters_create_secure_udp(
+        NW_PARAMETERS_DISABLE_PROTOCOL,
+        NW_PARAMETERS_DEFAULT_CONFIGURATION
+    );
+    nw_parameters_set_reuse_local_port(listenerParams, true);
 
-        struct sockaddr_in localAddr;
-        memset(&localAddr, 0, sizeof(localAddr));
-        localAddr.sin_family = AF_INET;
-        localAddr.sin_addr.s_addr = INADDR_ANY;
-        localAddr.sin_port = 0;
-        if (bind(s_udpSock4, (struct sockaddr *)&localAddr, sizeof(localAddr)) < 0) {
-            ztLog([NSString stringWithFormat:@"IPv4 bind failed: %s (errno=%d)", strerror(errno), errno]);
-            close(s_udpSock4);
-            s_udpSock4 = -1;
-        } else {
-            struct sockaddr_in boundAddr;
-            socklen_t addrLen = sizeof(boundAddr);
-            getsockname(s_udpSock4, (struct sockaddr *)&boundAddr, &addrLen);
-            ztLog([NSString stringWithFormat:@"IPv4 UDP bound on port %d (fd=%d)", ntohs(boundAddr.sin_port), s_udpSock4]);
-        }
+    s_listener4 = nw_listener_create(listenerParams);
+    if (s_listener4) {
+        nw_listener_set_queue(s_listener4, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+        nw_listener_set_new_connection_handler(s_listener4, ^(nw_connection_t conn) {
+            ztLog(@"NW: incoming IPv4 connection");
+            nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+            nw_connection_start(conn);
+            receiveFromListener(conn);
+        });
+        nw_listener_set_state_changed_handler(s_listener4, ^(nw_listener_state_t state, nw_error_t error) {
+            switch (state) {
+                case nw_listener_state_ready:
+                    s_localPort4 = (int)nw_listener_get_port(s_listener4);
+                    ztLog([NSString stringWithFormat:@"NW IPv4 listener ready on port %d", s_localPort4]);
+                    break;
+                case nw_listener_state_failed:
+                    ztLog([NSString stringWithFormat:@"NW IPv4 listener failed: %d", error ? (int)nw_error_get_error_code(error) : -1]);
+                    break;
+                case nw_listener_state_cancelled:
+                    ztLog(@"NW IPv4 listener cancelled");
+                    break;
+                default:
+                    break;
+            }
+        });
+        nw_listener_start(s_listener4);
+        ztLog(@"NW: IPv4 listener started");
     } else {
-        ztLog([NSString stringWithFormat:@"IPv4 socket() failed: %s (errno=%d)", strerror(errno), errno]);
+        ztLog(@"NW: failed to create IPv4 listener");
     }
 
-    s_udpSock6 = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (s_udpSock6 >= 0) {
-        int flags = fcntl(s_udpSock6, F_GETFL, 0);
-        fcntl(s_udpSock6, F_SETFL, flags | O_NONBLOCK);
-        int v6only = 1;
-        setsockopt(s_udpSock6, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
-        int val = 1;
-        setsockopt(s_udpSock6, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    nw_parameters_t listenerParams6 = nw_parameters_create_secure_udp(
+        NW_PARAMETERS_DISABLE_PROTOCOL,
+        NW_PARAMETERS_DEFAULT_CONFIGURATION
+    );
+    nw_parameters_set_reuse_local_port(listenerParams6, true);
 
-        struct sockaddr_in6 localAddr6;
-        memset(&localAddr6, 0, sizeof(localAddr6));
-        localAddr6.sin6_family = AF_INET6;
-        localAddr6.sin6_addr = in6addr_any;
-        localAddr6.sin6_port = 0;
-        if (bind(s_udpSock6, (struct sockaddr *)&localAddr6, sizeof(localAddr6)) < 0) {
-            ztLog([NSString stringWithFormat:@"IPv6 bind failed: %s (errno=%d)", strerror(errno), errno]);
-            close(s_udpSock6);
-            s_udpSock6 = -1;
-        } else {
-            struct sockaddr_in6 boundAddr6;
-            socklen_t addrLen6 = sizeof(boundAddr6);
-            getsockname(s_udpSock6, (struct sockaddr *)&boundAddr6, &addrLen6);
-            ztLog([NSString stringWithFormat:@"IPv6 UDP bound on port %d (fd=%d)", ntohs(boundAddr6.sin6_port), s_udpSock6]);
-        }
+    s_listener6 = nw_listener_create(listenerParams6);
+    if (s_listener6) {
+        nw_listener_set_queue(s_listener6, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+        nw_listener_set_new_connection_handler(s_listener6, ^(nw_connection_t conn) {
+            ztLog(@"NW: incoming IPv6 connection");
+            nw_connection_set_queue(conn, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+            nw_connection_start(conn);
+            receiveFromListener(conn);
+        });
+        nw_listener_set_state_changed_handler(s_listener6, ^(nw_listener_state_t state, nw_error_t error) {
+            switch (state) {
+                case nw_listener_state_ready:
+                    s_localPort6 = (int)nw_listener_get_port(s_listener6);
+                    ztLog([NSString stringWithFormat:@"NW IPv6 listener ready on port %d", s_localPort6]);
+                    break;
+                case nw_listener_state_failed:
+                    ztLog([NSString stringWithFormat:@"NW IPv6 listener failed: %d", error ? (int)nw_error_get_error_code(error) : -1]);
+                    break;
+                case nw_listener_state_cancelled:
+                    ztLog(@"NW IPv6 listener cancelled");
+                    break;
+                default:
+                    break;
+            }
+        });
+        nw_listener_start(s_listener6);
+        ztLog(@"NW: IPv6 listener started");
     } else {
-        ztLog([NSString stringWithFormat:@"IPv6 socket() failed: %s (errno=%d)", strerror(errno), errno]);
+        ztLog(@"NW: failed to create IPv6 listener");
     }
 
-    if (s_udpSock4 < 0 && s_udpSock6 < 0) {
-        ztLog(@"FATAL: No UDP sockets available! Cannot start node.");
+    int waitCount = 0;
+    while ((s_localPort4 == 0 && s_localPort6 == 0) && waitCount < 30) {
+        [NSThread sleepForTimeInterval:0.1];
+        waitCount++;
+    }
+    ztLog([NSString stringWithFormat:@"NW: ports ready - IPv4=%d IPv6=%d", s_localPort4, s_localPort6]);
+
+    if (s_localPort4 == 0 && s_localPort6 == 0) {
+        ztLog(@"FATAL: No NW listeners available! Cannot start node.");
         return NO;
     }
 
@@ -600,7 +714,7 @@ static void nodeThreadFunc() {
     s_nodeThread = new std::thread(nodeThreadFunc);
     s_nodeThread->detach();
 
-    ztLog(@"Node thread launched");
+    ztLog(@"Node thread launched (NWConnection mode)");
     return YES;
 }
 
@@ -618,8 +732,17 @@ static void nodeThreadFunc() {
             s_node = nullptr;
         }
     }
-    if (s_udpSock4 >= 0) { close(s_udpSock4); s_udpSock4 = -1; }
-    if (s_udpSock6 >= 0) { close(s_udpSock6); s_udpSock6 = -1; }
+    {
+        std::lock_guard<std::mutex> lock(s_connMutex);
+        for (auto &pair : s_connections) {
+            nw_connection_cancel(pair.second);
+        }
+        s_connections.clear();
+    }
+    if (s_listener4) { nw_listener_cancel(s_listener4); s_listener4 = nil; }
+    if (s_listener6) { nw_listener_cancel(s_listener6); s_listener6 = nil; }
+    s_localPort4 = 0;
+    s_localPort6 = 0;
     s_nodeOnline = false;
     ztLog(@"Node stopped");
 }

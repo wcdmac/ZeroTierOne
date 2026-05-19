@@ -71,18 +71,26 @@ swiftc \
     -framework CoreGraphics \
     -framework QuartzCore \
     -framework SwiftUI \
+    -framework Network \
     -o "$APP_DIR/$APP_NAME" \
     $SWIFT_OBJS \
     "$OBJ_DIR/ZeroTierBridge.o"
 
-echo "=== Step 4: Create PkgInfo ==="
+echo "=== Step 4: Ad-hoc code sign with entitlements ==="
+codesign --force --sign - \
+    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
+    "$APP_DIR/$APP_NAME"
+echo "Code signature embedded with entitlements"
+codesign -d --entitlements - "$APP_DIR/$APP_NAME" 2>&1 | head -20 || true
+
+echo "=== Step 5: Create PkgInfo ==="
 printf "APPL????" > "$APP_DIR/PkgInfo"
 
-echo "=== Step 5: Process Info.plist ==="
+echo "=== Step 6: Process Info.plist ==="
 plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
-echo "=== Step 6: Copy resources ==="
+echo "=== Step 7: Copy resources ==="
 cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
 
 mkdir -p "$APP_DIR/zh-Hans.lproj"
@@ -107,6 +115,9 @@ done
 echo "--- Executable info ---"
 file "$APP_DIR/$APP_NAME"
 ls -la "$APP_DIR/$APP_NAME"
+
+echo "--- Code signature info ---"
+codesign -dvv "$APP_DIR/$APP_NAME" 2>&1 | head -15 || true
 
 echo "--- Info.plist check ---"
 if [ -f "$APP_DIR/Info.plist" ]; then

@@ -126,7 +126,7 @@ static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
                                          const void *frameData, unsigned int frameLength) {
 }
 
-static void virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
+static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
                                           uint64_t nwid, void **nuptr,
                                           enum ZT_VirtualNetworkConfigOperation op,
                                           const ZT_VirtualNetworkConfig *config) {
@@ -138,6 +138,7 @@ static void virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
             }
         });
     }
+    return 0;
 }
 
 static void eventCallback(ZT_Node *node, void *uptr, void *tptr,

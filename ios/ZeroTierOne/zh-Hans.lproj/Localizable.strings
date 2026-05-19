@@ -1,14 +1,33 @@
 /* ZeroTier One - Simplified Chinese Localization */
 
-"APP_TITLE" = "ZeroTier One";
+"TAB_NETWORK" = "网络";
+"TAB_IDENTITY" = "身份";
+"TAB_SETTINGS" = "设置";
+"NETWORK_TITLE" = "ZeroTier One";
 "STATUS_OFFLINE" = "离线";
 "STATUS_CONNECTED" = "已连接";
 "STATUS_CONNECTING" = "连接中...";
 "STATUS_FAILED" = "连接失败";
 "NODE_ID_FORMAT" = "节点: %@";
-"NETWORK_ID_PLACEHOLDER" = "输入网络ID";
+"NETWORK_ID_PLACEHOLDER" = "输入网络ID（16位十六进制）";
 "JOIN_NETWORK" = "加入网络";
 "LEAVE_NETWORK" = "离开网络";
+"SAVED_NETWORKS" = "已保存的网络";
 "ERROR" = "错误";
 "ENTER_NETWORK_ID" = "请输入网络ID";
 "OK" = "确定";
+"IDENTITY_TITLE" = "身份";
+"YOUR_NODE_ID" = "您的节点ID: %@";
+"COPY_NODE_ID" = "复制节点ID";
+"PUBLIC_IDENTITY" = "公共身份:";
+"COPY_PUBLIC_ID" = "复制公共身份";
+"COPIED" = "已复制！";
+"SETTINGS_TITLE" = "设置";
+"SETTINGS_VERSION" = "版本";
+"SETTINGS_CORE" = "核心引擎";
+"SETTINGS_PLATFORM" = "平台";
+"SETTINGS_MIN_IOS" = "最低iOS版本";
+"SETTINGS_BUILD" = "构建类型";
+"SETTINGS_UNSIGNED" = "未签名";
+"SETTINGS_LANG" = "语言支持";
+"SETTINGS_DISCLAIMER" = "此为未签名构建版本。实际网络连接需要使用NetworkExtension权限进行正确签名。节点身份使用ZeroTier核心加密函数在本地生成。";

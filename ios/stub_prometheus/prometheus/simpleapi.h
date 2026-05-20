@@ -6,6 +6,10 @@
 #include <chrono>
 #include <memory>
 #include <cstdint>
+#include <thread>
+#include <functional>
+#include <fstream>
+#include <iostream>
 
 namespace prometheus {
 

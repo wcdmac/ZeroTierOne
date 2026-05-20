@@ -66,6 +66,8 @@ swiftc \
     -module-name ZeroTierTunnel \
     -parse-as-library \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel-Bridging-Header.h" \
+    -Xlinker -isysroot \
+    -Xlinker "$SDK" \
     -Xlinker -force_load \
     -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
     "$OBJ_DIR/ZTNodeBridge.o" \

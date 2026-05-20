@@ -8,112 +8,112 @@ enum TunnelError: Error {
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
-    private var nodeBridge: ZTNodeBridge!
+    private var nodeBridge: ZTNodeBridge?
     private var tunnelReady = false
     private var startCompleter: ((Error?) -> Void)?
     private var readPacketsActive = false
     private let appGroupIdentifier = "group.com.zerotier.ZeroTierOne"
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-        NSLog("[ZT-Tunnel] startTunnel called")
+        NSLog("[ZT-Tunnel] ========== startTunnel called ==========")
 
         let tunnelProto = protocolConfiguration as? NETunnelProviderProtocol
         let providerConfig = tunnelProto?.providerConfiguration
         let networkId = (providerConfig?["networkId"] as? String) ?? ""
 
         let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
-        let dataPath = (containerURL?.path ?? NSTemporaryDirectory()) + "/zerotier"
-
-        NSLog("[ZT-Tunnel] Data path: %@", dataPath)
-        NSLog("[ZT-Tunnel] Network ID: %@", networkId)
-
-        nodeBridge = ZTNodeBridge(dataPath: dataPath)
-
-        nodeBridge.onStatusChanged = { [weak self] online in
-            NSLog("[ZT-Tunnel] Status changed: online=%@", online ? "YES" : "NO")
-            self?.updateSharedStatus()
+        let dataPath: String
+        if let containerURL = containerURL {
+            dataPath = containerURL.path + "/zerotier"
+            NSLog("[ZT-Tunnel] Using App Group container: %@", dataPath)
+        } else {
+            dataPath = NSTemporaryDirectory() + "/zerotier"
+            NSLog("[ZT-Tunnel] WARNING: App Group container nil, using temp: %@", dataPath)
         }
 
-        nodeBridge.onNetworkConfigChanged = { [weak self] config in
-            NSLog("[ZT-Tunnel] Network config changed: %@", config)
-            self?.handleNetworkConfig(config)
-        }
-
-        nodeBridge.onFrameReceived = { [weak self] frameData, etherType in
-            self?.handleFrameReceived(frameData: frameData, etherType: etherType)
-        }
-
-        nodeBridge.onLogMessage = { message in
-            NSLog("[ZT-Tunnel] %@", message)
-        }
-
-        if !nodeBridge.startNode() {
-            NSLog("[ZT-Tunnel] Failed to start node")
-            completionHandler(TunnelError.badConfiguration)
-            return
-        }
-
-        if !networkId.isEmpty {
-            nodeBridge.joinNetwork(networkId)
-        }
+        NSLog("[ZT-Tunnel] Network ID: '%@'", networkId)
+        NSLog("[ZT-Tunnel] Process PID: %d", getpid())
 
         startCompleter = completionHandler
 
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
-            guard let self = self else { return }
-            if !self.tunnelReady {
-                NSLog("[ZT-Tunnel] Timeout waiting for network config, completing with basic settings")
-                self.applyBasicNetworkSettings(completionHandler: completionHandler)
-            }
-        }
-    }
-
-    private func handleNetworkConfig(_ config: [AnyHashable: Any]) {
-        guard !tunnelReady else {
-            NSLog("[ZT-Tunnel] Tunnel already ready, updating settings")
-            applyNetworkSettings(config)
-            return
-        }
-
-        applyNetworkSettings(config) { [weak self] error in
-            guard let self = self else { return }
-            if let error = error {
-                NSLog("[ZT-Tunnel] Failed to apply network settings: %@", error.localizedDescription)
-                self.startCompleter?(error)
-                self.startCompleter = nil
-            } else {
-                NSLog("[ZT-Tunnel] Network settings applied successfully")
-                self.tunnelReady = true
-                self.startCompleter?(nil)
-                self.startCompleter = nil
-                self.startReadingPackets()
-            }
-        }
-    }
-
-    private func applyBasicNetworkSettings(completionHandler: @escaping (Error?) -> Void) {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "0.0.0.0")
-
-        let ipv4Settings = NEIPv4Settings(addresses: ["10.0.0.1"], subnetMasks: ["255.255.255.0"])
+        let ipv4Settings = NEIPv4Settings(addresses: ["10.144.0.1"], subnetMasks: ["255.255.0.0"])
         ipv4Settings.includedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings = ipv4Settings
-
         let dnsSettings = NEDNSSettings(servers: ["8.8.8.8", "8.8.4.4"])
         settings.dnsSettings = dnsSettings
         settings.mtu = 2800
 
-        setTunnelNetworkSettings(settings) { error in
+        setTunnelNetworkSettings(settings) { [weak self] error in
+            guard let self = self else { return }
             if let error = error {
-                completionHandler(error)
-            } else {
-                self.tunnelReady = true
-                completionHandler(nil)
-                self.startReadingPackets()
+                NSLog("[ZT-Tunnel] Failed to set initial network settings: %@", error.localizedDescription)
+                self.completeStart(error: error)
+                return
             }
+
+            NSLog("[ZT-Tunnel] Initial network settings applied, now starting ZeroTier node...")
+            self.tunnelReady = true
+            self.completeStart(error: nil)
+            self.startZeroTierNode(dataPath: dataPath, networkId: networkId)
         }
     }
 
-    private func applyNetworkSettings(_ config: [AnyHashable: Any], completion: ((Error?) -> Void)? = nil) {
+    private func completeStart(error: Error?) {
+        guard let completer = startCompleter else { return }
+        startCompleter = nil
+        completer(error)
+    }
+
+    private func startZeroTierNode(dataPath: String, networkId: String) {
+        NSLog("[ZT-Tunnel] Creating ZTNodeBridge with dataPath: %@", dataPath)
+
+        nodeBridge = ZTNodeBridge(dataPath: dataPath)
+
+        nodeBridge?.onStatusChanged = { [weak self] online in
+            NSLog("[ZT-Tunnel] Node status changed: online=%@", online ? "YES" : "NO")
+            self?.updateSharedStatus()
+        }
+
+        nodeBridge?.onNetworkConfigChanged = { [weak self] config in
+            NSLog("[ZT-Tunnel] Network config changed: %@", config)
+            self?.handleNetworkConfig(config)
+        }
+
+        nodeBridge?.onFrameReceived = { [weak self] frameData, etherType in
+            self?.handleFrameReceived(frameData: frameData, etherType: etherType)
+        }
+
+        nodeBridge?.onLogMessage = { message in
+            NSLog("[ZT-Tunnel] %@", message)
+        }
+
+        guard let bridge = nodeBridge else {
+            NSLog("[ZT-Tunnel] Failed to create ZTNodeBridge")
+            return
+        }
+
+        if !bridge.startNode() {
+            NSLog("[ZT-Tunnel] Failed to start ZeroTier node - tunnel will remain active but without ZeroTier connectivity")
+            return
+        }
+
+        NSLog("[ZT-Tunnel] ZeroTier node started successfully")
+
+        if !networkId.isEmpty {
+            NSLog("[ZT-Tunnel] Joining network: %@", networkId)
+            bridge.joinNetwork(networkId)
+        }
+
+        startReadingPackets()
+    }
+
+    private func handleNetworkConfig(_ config: [AnyHashable: Any]) {
+        NSLog("[ZT-Tunnel] Applying updated network config from ZeroTier")
+        applyNetworkSettings(config)
+    }
+
+    private func applyNetworkSettings(_ config: [AnyHashable: Any]) {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "0.0.0.0")
 
         let ipv4Addresses = config["ipv4Addresses"] as? [String] ?? []
@@ -150,10 +150,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             ipv4Settings.includedRoutes = includedRoutes
             settings.ipv4Settings = ipv4Settings
-        } else {
-            let ipv4Settings = NEIPv4Settings(addresses: ["10.0.0.1"], subnetMasks: ["255.255.255.0"])
-            ipv4Settings.includedRoutes = [NEIPv4Route.default()]
-            settings.ipv4Settings = ipv4Settings
         }
 
         if !ipv6Addresses.isEmpty {
@@ -174,7 +170,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         setTunnelNetworkSettings(settings) { error in
-            completion?(error)
+            if let error = error {
+                NSLog("[ZT-Tunnel] Failed to update network settings: %@", error.localizedDescription)
+            } else {
+                NSLog("[ZT-Tunnel] Network settings updated successfully")
+            }
         }
     }
 
@@ -193,6 +193,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func handlePackets(packets: [Data], protocols: [NSNumber]) {
+        guard let bridge = nodeBridge else { return }
         for (packet, proto) in zip(packets, protocols) {
             let etherType: UInt32
             if proto.int32Value == AF_INET {
@@ -202,7 +203,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             } else {
                 continue
             }
-            nodeBridge.sendFrame(packet, etherType: etherType)
+            bridge.sendFrame(packet, etherType: etherType)
         }
     }
 
@@ -220,10 +221,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func updateSharedStatus() {
         let defaults = UserDefaults(suiteName: appGroupIdentifier)
-        defaults?.set(nodeBridge.isNodeOnline(), forKey: "isOnline")
-        defaults?.set(nodeBridge.isConnected(), forKey: "isConnected")
-        defaults?.set(nodeBridge.currentNetworkId(), forKey: "currentNetworkId")
-        defaults?.set(nodeBridge.nodeId(), forKey: "nodeId")
+        defaults?.set(nodeBridge?.isNodeOnline() ?? false, forKey: "isOnline")
+        defaults?.set(nodeBridge?.isConnected() ?? false, forKey: "isConnected")
+        defaults?.set(nodeBridge?.currentNetworkId(), forKey: "currentNetworkId")
+        let nid = nodeBridge?.nodeId() ?? ""
+        if nid != "--------" {
+            defaults?.set(nid, forKey: "nodeId")
+        }
         defaults?.synchronize()
     }
 
@@ -231,6 +235,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         NSLog("[ZT-Tunnel] stopTunnel called, reason: %d", reason.rawValue)
         readPacketsActive = false
         nodeBridge?.stopNode()
+        nodeBridge = nil
         tunnelReady = false
         startCompleter = nil
         completionHandler()
@@ -245,7 +250,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let command = messageData[0]
         switch command {
         case 0x01:
-            let nodeId = nodeBridge?.nodeId() ?? ""
+            let nodeId = nodeBridge?.nodeId() ?? "--------"
             completionHandler?(nodeId.data(using: .utf8))
 
         case 0x02:
@@ -276,6 +281,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         case 0x07:
             nodeBridge?.leaveNetwork()
             completionHandler?("ok".data(using: .utf8))
+
+        case 0x09:
+            completionHandler?("pong".data(using: .utf8))
 
         default:
             completionHandler?(nil)

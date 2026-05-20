@@ -16,6 +16,7 @@ class ZeroTierBridge: NSObject {
     private var statusTimer: Timer?
     private var logTimer: Timer?
     private var cachedLogEntries: [String] = []
+    private var cachedNodeId: String = "--------"
 
     override init() {
         super.init()
@@ -116,6 +117,18 @@ class ZeroTierBridge: NSObject {
                 }
             }
         }
+
+        sendIPCMessage(Data([0x01])) { [weak self] data in
+            guard let data = data,
+                  let nodeId = String(data: data, encoding: .utf8),
+                  !nodeId.isEmpty, nodeId != "--------" else { return }
+            DispatchQueue.main.async {
+                self?.cachedNodeId = nodeId
+                let defaults = UserDefaults(suiteName: self?.appGroupIdentifier ?? "")
+                defaults?.set(nodeId, forKey: "nodeId")
+                defaults?.synchronize()
+            }
+        }
     }
 
     private func pollExtensionLogs() {
@@ -147,19 +160,14 @@ class ZeroTierBridge: NSObject {
 
     func nodeId() -> String {
         let defaults = UserDefaults(suiteName: appGroupIdentifier)
-        if let nodeId = defaults?.string(forKey: "nodeId"), nodeId != "--------" {
+        if let nodeId = defaults?.string(forKey: "nodeId"), nodeId != "--------", !nodeId.isEmpty {
+            cachedNodeId = nodeId
             return nodeId
         }
-        var result: String = "--------"
-        let semaphore = DispatchSemaphore(value: 0)
-        sendIPCMessage(Data([0x01])) { data in
-            if let data = data, let str = String(data: data, encoding: .utf8), !str.isEmpty {
-                result = str
-            }
-            semaphore.signal()
+        if cachedNodeId != "--------" {
+            return cachedNodeId
         }
-        _ = semaphore.wait(timeout: .now() + 2.0)
-        return result
+        return "--------"
     }
 
     func isNodeOnline() -> Bool {

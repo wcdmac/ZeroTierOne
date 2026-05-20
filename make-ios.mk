@@ -2,8 +2,8 @@ CC=clang
 CXX=clang++
 TOPDIR=$(shell pwd)
 
-INCLUDES=-I$(TOPDIR) -isystem $(TOPDIR)/ext -I$(TOPDIR)/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/core/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/simpleapi/include -I$(TOPDIR)/ext/prometheus-cpp-lite-1.0/3rdparty/http-client-lite/include
-DEFS=-DZT_BUILD_PLATFORM=5 -DZT_BUILD_ARCHITECTURE=2
+INCLUDES=-I$(TOPDIR) -I$(TOPDIR)/ios/stub_prometheus -isystem $(TOPDIR)/ext -I$(TOPDIR)/include
+DEFS=-DZT_BUILD_PLATFORM=5 -DZT_BUILD_ARCHITECTURE=2 -DZT_NO_PEER_METRICS
 LIBS=
 
 IOS_VERSION_MIN=15.0

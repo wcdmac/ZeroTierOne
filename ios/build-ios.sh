@@ -22,18 +22,18 @@ python3 "$PROJECT_DIR/generate_xcode_project.py"
 echo "Xcode project generated"
 
 echo ""
-echo "=== Step 2: Build with xcodebuild ==="
+echo "=== Step 2: Build extension with xcodebuild ==="
 xcodebuild \
     -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
-    -scheme ZeroTierTunnel \
+    -target ZeroTierTunnel \
     -configuration Release \
     -sdk iphoneos \
     -arch arm64 \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
     IPHONEOS_DEPLOYMENT_TARGET=$MIN_VERSION \
-    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGN_IDENTITY="" \
     CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGNING_ALLOWED=NO \
     DEVELOPMENT_TEAM="" \
     ENABLE_BITCODE=NO \
     DEBUG_INFORMATION_FORMAT=dwarf \
@@ -44,15 +44,15 @@ echo ""
 echo "=== Step 3: Build main app with xcodebuild ==="
 xcodebuild \
     -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
-    -scheme ZeroTierOne \
+    -target ZeroTierOne \
     -configuration Release \
     -sdk iphoneos \
     -arch arm64 \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
     IPHONEOS_DEPLOYMENT_TARGET=$MIN_VERSION \
-    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGN_IDENTITY="" \
     CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGNING_ALLOWED=NO \
     DEVELOPMENT_TEAM="" \
     ENABLE_BITCODE=NO \
     DEBUG_INFORMATION_FORMAT=dwarf \

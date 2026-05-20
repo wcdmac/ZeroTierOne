@@ -1,4 +1,4 @@
-#import "ZeroTierBridge.h"
+#import "ZTNodeBridge.h"
 #include <string>
 #include <mutex>
 #include <thread>
@@ -18,11 +18,14 @@
 #include <node/Identity.hpp>
 #include <node/Utils.hpp>
 
-static ZeroTierBridge *s_sharedBridge = nil;
+static ZTNodeBridge *s_sharedBridge = nil;
 static std::mutex s_nodeMutex;
 static ZT_Node *s_node = nullptr;
 static std::atomic<bool> s_nodeRunning(false);
 static std::atomic<bool> s_nodeOnline(false);
+static std::atomic<bool> s_connected(false);
+static std::atomic<uint64_t> s_macAddress(0);
+static std::atomic<uint64_t> s_currentNwid(0);
 static std::thread *s_nodeThread = nullptr;
 static volatile int64_t s_nextBackgroundTaskDeadline = 0;
 static NSString *s_dataPath = nil;
@@ -45,11 +48,25 @@ static void ztLog(NSString *msg) {
         [s_logEntries addObject:entry];
         if (s_logEntries.count > 500) [s_logEntries removeObjectAtIndex:0];
     }
-    NSLog(@"[ZT] %@", msg);
+    NSLog(@"[ZT-Tunnel] %@", msg);
     if (s_sharedBridge) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (s_sharedBridge.onLogUpdate) s_sharedBridge.onLogUpdate();
-        });
+        if (s_sharedBridge.onLogMessage) {
+            s_sharedBridge.onLogMessage(msg);
+        }
+    }
+}
+
+static void updateSharedStatus() {
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"group.com.zerotier.ZeroTierOne"];
+    if (defaults) {
+        [defaults setBool:s_nodeOnline.load() forKey:@"isOnline"];
+        [defaults setBool:s_connected.load() forKey:@"isConnected"];
+        if (s_currentNwid.load() != 0) {
+            char nwidBuf[17] = {0};
+            snprintf(nwidBuf, sizeof(nwidBuf), "%.16llx", s_currentNwid.load());
+            [defaults setObject:[NSString stringWithUTF8String:nwidBuf] forKey:@"currentNetworkId"];
+        }
+        [defaults synchronize];
     }
 }
 
@@ -157,6 +174,10 @@ static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
                                          uint64_t sourceMac, uint64_t destMac,
                                          unsigned int etherType, unsigned int vlanId,
                                          const void *frameData, unsigned int frameLength) {
+    if (s_sharedBridge && s_sharedBridge.onFrameReceived && frameData && frameLength > 0) {
+        NSData *nsData = [NSData dataWithBytes:frameData length:frameLength];
+        s_sharedBridge.onFrameReceived(nsData, etherType);
+    }
 }
 
 static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -172,14 +193,77 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
     }
     ztLog([NSString stringWithFormat:@"NET CONFIG: nwid=%.16llx op=%s name=%s managed=%u", nwid, opStr, config->name, config->assignedAddressCount]);
 
-    if (s_sharedBridge) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            s_sharedBridge.connected = (op == ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_UP || op == ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_CONFIG_UPDATE);
-            if (s_sharedBridge.onStatusChange) {
-                s_sharedBridge.onStatusChange(s_sharedBridge.connected);
-            }
-        });
+    s_currentNwid = nwid;
+    s_macAddress = config->mac;
+
+    if (op == ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_UP || op == ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_CONFIG_UPDATE) {
+        s_connected = true;
+    } else {
+        s_connected = false;
     }
+
+    updateSharedStatus();
+
+    if (s_sharedBridge && s_sharedBridge.onNetworkConfigChanged) {
+        NSMutableDictionary *configDict = [NSMutableDictionary dictionary];
+        char nwidBuf[17] = {0};
+        snprintf(nwidBuf, sizeof(nwidBuf), "%.16llx", nwid);
+        configDict[@"nwid"] = [NSString stringWithUTF8String:nwidBuf];
+        configDict[@"op"] = [NSString stringWithUTF8String:opStr];
+        configDict[@"mac"] = @(config->mac);
+        configDict[@"mtu"] = @(config->mtu);
+        configDict[@"name"] = [NSString stringWithUTF8String:config->name];
+
+        NSMutableArray *ipv4Addrs = [NSMutableArray array];
+        NSMutableArray *ipv6Addrs = [NSMutableArray array];
+        NSMutableArray *routes = [NSMutableArray array];
+
+        for (unsigned int i = 0; i < config->assignedAddressCount; i++) {
+            char addrBuf[INET6_ADDRSTRLEN] = {0};
+            if (config->assignedAddresses[i].ss_family == AF_INET) {
+                const struct sockaddr_in *sin = (const struct sockaddr_in *)&config->assignedAddresses[i];
+                inet_ntop(AF_INET, &sin->sin_addr, addrBuf, sizeof(addrBuf));
+                [ipv4Addrs addObject:[NSString stringWithUTF8String:addrBuf]];
+            } else if (config->assignedAddresses[i].ss_family == AF_INET6) {
+                const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&config->assignedAddresses[i];
+                inet_ntop(AF_INET6, &sin6->sin6_addr, addrBuf, sizeof(addrBuf));
+                [ipv6Addrs addObject:[NSString stringWithUTF8String:addrBuf]];
+            }
+        }
+        configDict[@"ipv4Addresses"] = ipv4Addrs;
+        configDict[@"ipv6Addresses"] = ipv6Addrs;
+
+        for (unsigned int i = 0; i < config->routeCount; i++) {
+            NSMutableDictionary *route = [NSMutableDictionary dictionary];
+            char targetBuf[INET6_ADDRSTRLEN] = {0};
+            char viaBuf[INET6_ADDRSTRLEN] = {0};
+            if (config->routes[i].target.ss_family == AF_INET) {
+                const struct sockaddr_in *sin = (const struct sockaddr_in *)&config->routes[i].target;
+                inet_ntop(AF_INET, &sin->sin_addr, targetBuf, sizeof(targetBuf));
+                route[@"target"] = [NSString stringWithUTF8String:targetBuf];
+                if (config->routes[i].via.ss_family == AF_INET) {
+                    const struct sockaddr_in *viaSin = (const struct sockaddr_in *)&config->routes[i].via;
+                    inet_ntop(AF_INET, &viaSin->sin_addr, viaBuf, sizeof(viaBuf));
+                    route[@"via"] = [NSString stringWithUTF8String:viaBuf];
+                }
+            } else if (config->routes[i].target.ss_family == AF_INET6) {
+                const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&config->routes[i].target;
+                inet_ntop(AF_INET6, &sin6->sin6_addr, targetBuf, sizeof(targetBuf));
+                route[@"target"] = [NSString stringWithUTF8String:targetBuf];
+                if (config->routes[i].via.ss_family == AF_INET6) {
+                    const struct sockaddr_in6 *viaSin6 = (const struct sockaddr_in6 *)&config->routes[i].via;
+                    inet_ntop(AF_INET6, &viaSin6->sin6_addr, viaBuf, sizeof(viaBuf));
+                    route[@"via"] = [NSString stringWithUTF8String:viaBuf];
+                }
+            }
+            route[@"metric"] = @(config->routes[i].metric);
+            [routes addObject:route];
+        }
+        configDict[@"routes"] = routes;
+
+        s_sharedBridge.onNetworkConfigChanged(configDict);
+    }
+
     return 0;
 }
 
@@ -203,18 +287,16 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
     switch (event) {
         case ZT_EVENT_ONLINE:
             s_nodeOnline = true;
-            if (s_sharedBridge) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (s_sharedBridge.onOnlineStatusChange) s_sharedBridge.onOnlineStatusChange(YES);
-                });
+            updateSharedStatus();
+            if (s_sharedBridge && s_sharedBridge.onStatusChanged) {
+                s_sharedBridge.onStatusChanged(YES);
             }
             break;
         case ZT_EVENT_OFFLINE:
             s_nodeOnline = false;
-            if (s_sharedBridge) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (s_sharedBridge.onOnlineStatusChange) s_sharedBridge.onOnlineStatusChange(NO);
-                });
+            updateSharedStatus();
+            if (s_sharedBridge && s_sharedBridge.onStatusChanged) {
+                s_sharedBridge.onStatusChanged(NO);
             }
             break;
         case ZT_EVENT_FATAL_ERROR_IDENTITY_COLLISION:
@@ -278,7 +360,7 @@ static void logNodeStatus() {
 }
 
 static void nodeThreadFunc() {
-    ztLog(@"Node thread started (BSD socket mode)");
+    ztLog(@"Node thread started (BSD socket mode, NEPacketTunnel)");
     int64_t lastStatusLog = 0;
     int bgTaskCount = 0;
 
@@ -302,6 +384,7 @@ static void nodeThreadFunc() {
         if (now - lastStatusLog >= 15000 && s_node) {
             lastStatusLog = now;
             logNodeStatus();
+            updateSharedStatus();
         }
 
         uint8_t buf[ZT_MAX_PHYSMTU];
@@ -381,31 +464,18 @@ static void nodeThreadFunc() {
     ztLog(@"Node thread stopped");
 }
 
-@implementation ZeroTierBridge
+@implementation ZTNodeBridge
 
-+ (instancetype)sharedInstance {
-    static ZeroTierBridge *instance = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        instance = [[ZeroTierBridge alloc] init];
-    });
-    return instance;
-}
-
-- (instancetype)init {
+- (instancetype)initWithDataPath:(NSString *)dataPath {
     self = [super init];
     if (self) {
-        _connected = NO;
         s_sharedBridge = self;
         s_logEntries = [NSMutableArray new];
-
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *docs = paths.firstObject;
-        s_dataPath = [docs stringByAppendingPathComponent:@"zerotier"];
+        s_dataPath = dataPath;
         [[NSFileManager defaultManager] createDirectoryAtPath:s_dataPath withIntermediateDirectories:YES attributes:nil error:nil];
 
         ztLog([NSString stringWithFormat:@"Data path: %@", s_dataPath]);
-        ztLog(@"Using BSD socket mode with ad-hoc signed entitlements");
+        ztLog(@"NEPacketTunnel extension - BSD socket mode");
 
         NSFileManager *fm = [NSFileManager defaultManager];
         NSString *planetPath = [s_dataPath stringByAppendingPathComponent:@"planet"];
@@ -433,7 +503,11 @@ static void nodeThreadFunc() {
         if (addr != 0) {
             char buf[11] = {0};
             ZeroTier::Address(addr).toString(buf);
-            return [NSString stringWithUTF8String:buf];
+            NSString *nodeId = [NSString stringWithUTF8String:buf];
+            NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"group.com.zerotier.ZeroTierOne"];
+            [defaults setObject:nodeId forKey:@"nodeId"];
+            [defaults synchronize];
+            return nodeId;
         }
     }
 
@@ -446,7 +520,11 @@ static void nodeThreadFunc() {
             if (id.fromString([pubStr UTF8String])) {
                 char buf[11] = {0};
                 id.address().toString(buf);
-                return [NSString stringWithUTF8String:buf];
+                NSString *nodeId = [NSString stringWithUTF8String:buf];
+                NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"group.com.zerotier.ZeroTierOne"];
+                [defaults setObject:nodeId forKey:@"nodeId"];
+                [defaults synchronize];
+                return nodeId;
             }
         }
     }
@@ -456,6 +534,17 @@ static void nodeThreadFunc() {
 
 - (BOOL)isNodeOnline { return s_nodeOnline; }
 - (BOOL)isNodeRunning { return s_nodeRunning; }
+- (BOOL)isConnected { return s_connected; }
+- (uint64_t)macAddress { return s_macAddress; }
+
+- (NSString *)currentNetworkId {
+    if (s_currentNwid.load() != 0) {
+        char buf[17] = {0};
+        snprintf(buf, sizeof(buf), "%.16llx", s_currentNwid.load());
+        return [NSString stringWithUTF8String:buf];
+    }
+    return nil;
+}
 
 - (NSArray<NSString *> *)logEntries {
     std::lock_guard<std::mutex> lock(s_logMutex);
@@ -490,9 +579,10 @@ static void nodeThreadFunc() {
     char addrBuf[11] = {0};
     ZeroTier::Address(status.address).toString(addrBuf);
 
-    return [NSString stringWithFormat:@"Address: %s\nOnline: %s\nTX: %lld  RX: %lld  TXFail: %lld",
+    return [NSString stringWithFormat:@"Address: %s\nOnline: %s\nConnected: %s\nTX: %lld  RX: %lld  TXFail: %lld",
             addrBuf,
             status.online ? "YES" : "NO",
+            s_connected.load() ? "YES" : "NO",
             s_lastSendCount.load(),
             s_lastRecvCount.load(),
             s_lastSendFailCount.load()];
@@ -504,7 +594,7 @@ static void nodeThreadFunc() {
         return YES;
     }
 
-    ztLog(@"Starting ZeroTier node (BSD socket mode)...");
+    ztLog(@"Starting ZeroTier node (NEPacketTunnel, BSD socket mode)...");
 
     s_udpSock4 = socket(AF_INET, SOCK_DGRAM, 0);
     if (s_udpSock4 >= 0) {
@@ -595,13 +685,7 @@ static void nodeThreadFunc() {
     ZeroTier::Address(addr).toString(addrBuf);
     ztLog([NSString stringWithFormat:@"Node created successfully! Address: %s (0x%llx)", addrBuf, (unsigned long long)addr]);
 
-    NSString *planetPath = [s_dataPath stringByAppendingPathComponent:@"planet"];
-    NSData *planetData = [NSData dataWithContentsOfFile:planetPath];
-    if (planetData) {
-        ztLog([NSString stringWithFormat:@"Planet file saved: %lu bytes", (unsigned long)planetData.length]);
-    } else {
-        ztLog(@"WARNING: Planet file not saved after node creation!");
-    }
+    [self nodeId];
 
     s_lastSendCount = 0;
     s_lastRecvCount = 0;
@@ -611,7 +695,7 @@ static void nodeThreadFunc() {
     s_nodeThread = new std::thread(nodeThreadFunc);
     s_nodeThread->detach();
 
-    ztLog(@"Node thread launched (BSD socket mode)");
+    ztLog(@"Node thread launched (NEPacketTunnel mode)");
     return YES;
 }
 
@@ -632,27 +716,23 @@ static void nodeThreadFunc() {
     if (s_udpSock4 >= 0) { close(s_udpSock4); s_udpSock4 = -1; }
     if (s_udpSock6 >= 0) { close(s_udpSock6); s_udpSock6 = -1; }
     s_nodeOnline = false;
+    s_connected = false;
+    updateSharedStatus();
     ztLog(@"Node stopped");
 }
 
-- (void)joinNetwork:(NSString *)networkId completion:(void (^)(BOOL success))completion {
+- (void)joinNetwork:(NSString *)networkId {
     if (!s_nodeRunning) {
-        ztLog(@"Node not running, starting before join...");
-        if (![self startNode]) {
-            ztLog(@"Failed to start node for join");
-            if (completion) completion(NO);
-            return;
-        }
+        ztLog(@"Node not running, cannot join network");
+        return;
     }
 
     uint64_t nwid = [self parseNetworkId:networkId];
     if (nwid == 0) {
         ztLog([NSString stringWithFormat:@"Invalid network ID: '%@'", networkId]);
-        if (completion) completion(NO);
         return;
     }
 
-    self.currentNetworkId = networkId;
     ztLog([NSString stringWithFormat:@"Joining network %.16llx (input: %@)...", nwid, networkId]);
 
     {
@@ -660,38 +740,43 @@ static void nodeThreadFunc() {
         if (s_node) {
             enum ZT_ResultCode rc = ZT_Node_join(s_node, nwid, nullptr, nullptr);
             ztLog([NSString stringWithFormat:@"ZT_Node_join result: %d (0=OK, 1=IGNORED)", (int)rc]);
-            if (rc != ZT_RESULT_OK && rc != ZT_RESULT_OK_IGNORED) {
-                if (completion) completion(NO);
-                return;
-            }
         } else {
             ztLog(@"Node is null, cannot join");
-            if (completion) completion(NO);
-            return;
         }
     }
 
-    [self saveNetwork:networkId];
-    if (completion) completion(YES);
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"group.com.zerotier.ZeroTierOne"];
+    NSMutableArray *networks = [[defaults stringArrayForKey:@"savedNetworks"] mutableCopy] ?: [NSMutableArray array];
+    if (![networks containsObject:networkId]) {
+        [networks addObject:networkId];
+        [defaults setObject:networks forKey:@"savedNetworks"];
+    }
+    [defaults synchronize];
 }
 
 - (void)leaveNetwork {
-    if (self.currentNetworkId.length > 0 && s_node) {
-        uint64_t nwid = [self parseNetworkId:self.currentNetworkId];
-        if (nwid != 0) {
-            ztLog([NSString stringWithFormat:@"Leaving network %.16llx", nwid]);
-            std::lock_guard<std::mutex> lock(s_nodeMutex);
-            ZT_Node_leave(s_node, nwid, nullptr, nullptr);
-        }
+    if (s_currentNwid.load() != 0 && s_node) {
+        ztLog([NSString stringWithFormat:@"Leaving network %.16llx", s_currentNwid.load()]);
+        std::lock_guard<std::mutex> lock(s_nodeMutex);
+        ZT_Node_leave(s_node, s_currentNwid.load(), nullptr, nullptr);
     }
-    self.connected = NO;
-    [self removeNetwork:self.currentNetworkId];
-    self.currentNetworkId = nil;
+    s_connected = false;
+    s_currentNwid = 0;
+    updateSharedStatus();
 }
 
-- (NSArray<NSString *> *)savedNetworks {
-    NSArray *networks = [[NSUserDefaults standardUserDefaults] objectForKey:@"zt_saved_networks"];
-    return networks ?: @[];
+- (void)sendFrame:(NSData *)frameData etherType:(unsigned int)etherType {
+    if (!s_node || !s_nodeRunning || s_currentNwid.load() == 0) return;
+
+    uint64_t nwid = s_currentNwid.load();
+    uint64_t mac = s_macAddress.load();
+    int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
+
+    std::lock_guard<std::mutex> lock(s_nodeMutex);
+    ZT_Node_processVirtualNetworkFrame(s_node, nullptr, nwid, mac, 0xffffffffffffULL,
+                                        etherType, 0,
+                                        frameData.bytes, (unsigned int)frameData.length,
+                                        &s_nextBackgroundTaskDeadline);
 }
 
 - (NSString *)fullIdentityString {
@@ -721,20 +806,6 @@ static void nodeThreadFunc() {
             nwid = (nwid << 4) | (uint64_t)(cStr[i] - 'A' + 10);
     }
     return nwid;
-}
-
-- (void)saveNetwork:(NSString *)networkId {
-    NSMutableArray *networks = [[[NSUserDefaults standardUserDefaults] objectForKey:@"zt_saved_networks"] mutableCopy] ?: [NSMutableArray new];
-    if (![networks containsObject:networkId]) {
-        [networks addObject:networkId];
-        [[NSUserDefaults standardUserDefaults] setObject:networks forKey:@"zt_saved_networks"];
-    }
-}
-
-- (void)removeNetwork:(NSString *)networkId {
-    NSMutableArray *networks = [[[NSUserDefaults standardUserDefaults] objectForKey:@"zt_saved_networks"] mutableCopy] ?: [NSMutableArray new];
-    [networks removeObject:networkId];
-    [[NSUserDefaults standardUserDefaults] setObject:networks forKey:@"zt_saved_networks"];
 }
 
 - (void)dealloc {

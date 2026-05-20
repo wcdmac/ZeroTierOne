@@ -52,7 +52,7 @@ jobs:
         ls -la $GITHUB_WORKSPACE/libzerotiercore-ios.a
         file $GITHUB_WORKSPACE/libzerotiercore-ios.a
 
-    - name: Build iOS app (unsigned)
+    - name: Build iOS app with NEPacketTunnelProvider
       run: |
         chmod +x $GITHUB_WORKSPACE/ios/build-ios.sh
         cd $GITHUB_WORKSPACE/ios
@@ -63,16 +63,28 @@ jobs:
         APP_PATH="$GITHUB_WORKSPACE/ios/build/ZeroTierOne.app"
         echo "=== App bundle size ==="
         du -sh "$APP_PATH"
-        echo "=== Executable check ==="
+        echo "=== Main executable check ==="
         file "$APP_PATH/ZeroTierOne"
         ls -la "$APP_PATH/ZeroTierOne"
-        echo "=== Info.plist check ==="
+        echo "=== Extension executable check ==="
+        file "$APP_PATH/PlugIns/ZeroTierTunnel.appex/ZeroTierTunnel"
+        ls -la "$APP_PATH/PlugIns/ZeroTierTunnel.appex/ZeroTierTunnel"
+        echo "=== Main Info.plist check ==="
         plutil -p "$APP_PATH/Info.plist" | head -10
+        echo "=== Extension Info.plist check ==="
+        plutil -p "$APP_PATH/PlugIns/ZeroTierTunnel.appex/Info.plist" | head -10
         echo "=== PkgInfo check ==="
         cat "$APP_PATH/PkgInfo"
         echo ""
+        echo "=== Extension PkgInfo check ==="
+        cat "$APP_PATH/PlugIns/ZeroTierTunnel.appex/PkgInfo"
+        echo ""
         echo "=== Full bundle listing ==="
-        find "$APP_PATH" -type f | head -30
+        find "$APP_PATH" -type f | head -40
+        echo "=== Main app entitlements ==="
+        codesign -d --entitlements - "$APP_PATH/ZeroTierOne" 2>&1 | head -20 || true
+        echo "=== Extension entitlements ==="
+        codesign -d --entitlements - "$APP_PATH/PlugIns/ZeroTierTunnel.appex/ZeroTierTunnel" 2>&1 | head -20 || true
 
     - name: Create IPA
       run: |
@@ -86,14 +98,18 @@ jobs:
           exit 1
         fi
         if [ ! -f "$APP_PATH/ZeroTierOne" ]; then
-          echo "ERROR: Executable missing in app bundle!"
+          echo "ERROR: Main executable missing in app bundle!"
+          exit 1
+        fi
+        if [ ! -f "$APP_PATH/PlugIns/ZeroTierTunnel.appex/ZeroTierTunnel" ]; then
+          echo "ERROR: Extension executable missing in app bundle!"
           exit 1
         fi
         mkdir -p $GITHUB_WORKSPACE/ipa/Payload
         cp -r "$APP_PATH" $GITHUB_WORKSPACE/ipa/Payload/
         cd $GITHUB_WORKSPACE/ipa
-        zip -r $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa Payload/
-        IPA_SIZE=$(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-unsigned.ipa | cut -f1)
+        zip -r $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-vpn.ipa Payload/
+        IPA_SIZE=$(du -sh $GITHUB_WORKSPACE/ZeroTierOne-iOS-arm64-vpn.ipa | cut -f1)
         echo "IPA size: $IPA_SIZE"
         if [ "$IPA_SIZE" = "4.0K" ] || [ "$IPA_SIZE" = "0B" ]; then
           echo "ERROR: IPA is too small, something went wrong!"
@@ -110,9 +126,9 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ZeroTierOne-iOS-unsigned
+        name: ZeroTierOne-iOS-vpn
         path: |
-          ZeroTierOne-iOS-arm64-unsigned.ipa
+          ZeroTierOne-iOS-arm64-vpn.ipa
           artifacts/libzerotiercore-ios.a
           artifacts/ZeroTierOne.h
           artifacts/ZeroTierDebug.h
@@ -142,7 +158,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: ZeroTierOne-iOS-unsigned
+        name: ZeroTierOne-iOS-vpn
         path: ./release-assets
 
     - name: Get version
@@ -167,27 +183,51 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ios-v${{ steps.version.outputs.version }}
-        name: "ZeroTier One iOS v${{ steps.version.outputs.version }} (Unsigned)"
+        name: "ZeroTier One iOS v${{ steps.version.outputs.version }} (VPN Tunnel)"
         body: |
-          ## ZeroTier One iOS v${{ steps.version.outputs.version }} (Unsigned Build)
+          ## ZeroTier One iOS v${{ steps.version.outputs.version }} (NEPacketTunnelProvider VPN Build)
 
           ### 构建信息 / Build Info
           - **平台**: iOS (arm64)
           - **最低支持版本**: iOS 15.0
-          - **编译方式**: 无签名编译 (Unsigned)
+          - **编译方式**: NEPacketTunnelProvider VPN隧道
           - **核心版本**: ${{ steps.version.outputs.version }}
+          - **安装方式**: TrollStore (ad-hoc签名)
+
+          ### 新特性 / New Features
+          - ✅ 系统级VPN隧道 (NEPacketTunnelProvider)
+          - ✅ 后台持续运行
+          - ✅ TUN虚拟网卡支持
+          - ✅ App Group数据共享
+          - ✅ IPC通信 (主App ↔ 网络扩展)
+
+          ### 架构说明 / Architecture
+          ```
+          ZeroTierOne.app (主App)
+          ├── UI (加入/离开网络、日志等)
+          ├── NETunnelProviderManager (管理隧道)
+          └── App Group 共享数据
+                  ↕ IPC (sendProviderMessage)
+          ZeroTierTunnel.appex (网络扩展)
+          ├── NEPacketTunnelProvider 子类
+          ├── ZeroTier 核心引擎 (ZTNodeBridge)
+          ├── UDP Socket 通信
+          └── TUN 虚拟网卡 (系统级)
+          ```
 
           ### 下载说明 / Download Instructions
-          - `ZeroTierOne-iOS-arm64-unsigned.ipa` - iOS应用安装包
+          - `ZeroTierOne-iOS-arm64-vpn.ipa` - iOS应用安装包 (VPN隧道版)
           - `libzerotiercore-ios.a` - ZeroTier核心静态库
           - `ZeroTierOne.h` - 核心头文件
           - `ZeroTierDebug.h` - 调试头文件
 
           ### 安装说明 / Installation
-          此IPA为未签名版本，需要通过以下方式安装：
-          1. 使用 AltStore / Sideloadly 等工具签名安装
-          2. 越狱设备可直接安装
-          3. 企业证书签名后分发
+          此IPA为ad-hoc签名版本，需要通过TrollStore安装：
+          1. 将IPA文件传输到iOS设备
+          2. 使用TrollStore安装IPA
+          3. 安装后在设置 → VPN中可看到ZeroTier隧道
+          4. 打开App，输入网络ID，点击加入网络
+          5. 系统会弹出VPN权限确认，点击允许
 
           ### 语言支持 / Language Support
           - English
@@ -197,8 +237,9 @@ jobs:
           - 最低支持 iOS 15.0
           - 支持 iPhone 和 iPad
           - 支持 arm64 架构
+          - 需要TrollStore安装
         files: |
-          ./release-assets/ZeroTierOne-iOS-arm64-unsigned.ipa
+          ./release-assets/ZeroTierOne-iOS-arm64-vpn.ipa
           ./release-assets/libzerotiercore-ios.a
           ./release-assets/ZeroTierOne.h
           ./release-assets/ZeroTierDebug.h

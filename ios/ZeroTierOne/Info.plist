@@ -62,5 +62,9 @@
 	</array>
 	<key>MinimumOSVersion</key>
 	<string>15.0</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>network-authentication</string>
+	</array>
 </dict>
 </plist>

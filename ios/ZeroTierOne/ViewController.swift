@@ -67,8 +67,10 @@ class NetworkViewController: UIViewController {
             self?.updateStatus()
             self?.networkListView.reloadData()
         }
+        ztBridge.onLogUpdate = { [weak self] in
+            self?.updateStatus()
+        }
 
-        ztBridge.startNode()
         updateStatus()
     }
 
@@ -237,6 +239,11 @@ class NetworkViewController: UIViewController {
             statusLabel.textColor = .systemOrange
             statusImageView.tintColor = .systemOrange
             leaveButton.isEnabled = false
+        } else if ztBridge.isNodeRunning() {
+            statusLabel.text = NSLocalizedString("STATUS_CONNECTING", value: "Connecting...", comment: "Connecting status")
+            statusLabel.textColor = .systemOrange
+            statusImageView.tintColor = .systemOrange
+            leaveButton.isEnabled = true
         } else {
             statusLabel.text = NSLocalizedString("STATUS_OFFLINE", value: "Offline", comment: "Offline status")
             statusLabel.textColor = .secondaryLabel
@@ -512,8 +519,9 @@ class SettingsViewController: UIViewController {
             (NSLocalizedString("SETTINGS_CORE", value: "Core Engine", comment: "Core engine label"), "ZeroTier One"),
             (NSLocalizedString("SETTINGS_PLATFORM", value: "Platform", comment: "Platform label"), "iOS arm64"),
             (NSLocalizedString("SETTINGS_MIN_IOS", value: "Minimum iOS", comment: "Min iOS label"), "15.0"),
-            (NSLocalizedString("SETTINGS_BUILD", value: "Build Type", comment: "Build type label"), NSLocalizedString("SETTINGS_UNSIGNED", value: "Unsigned", comment: "Unsigned build")),
-            (NSLocalizedString("SETTINGS_LANG", value: "Language Support", comment: "Language label"), "English / \u{7b80}\u{4f53}\u{4e2d}\u{6587}")
+            (NSLocalizedString("SETTINGS_BUILD", value: "Build Type", comment: "Build type label"), NSLocalizedString("SETTINGS_VPN", value: "VPN Tunnel", comment: "VPN build")),
+            (NSLocalizedString("SETTINGS_LANG", value: "Language Support", comment: "Language label"), "English / \u{7b80}\u{4f53}\u{4e2d}\u{6587}"),
+            (NSLocalizedString("SETTINGS_INSTALL", value: "Install Method", comment: "Install method label"), "TrollStore")
         ]
 
         for (label, value) in items {
@@ -537,7 +545,7 @@ class SettingsViewController: UIViewController {
         }
 
         let disclaimer = UILabel()
-        disclaimer.text = NSLocalizedString("SETTINGS_DISCLAIMER", value: "This is an unsigned build. Network connectivity requires proper signing with NetworkExtension entitlements. Node identity is generated locally using ZeroTier core cryptographic functions.", comment: "Disclaimer")
+        disclaimer.text = NSLocalizedString("SETTINGS_VPN_DESC", value: "This app uses NEPacketTunnelProvider for system-level VPN tunnel. ZeroTier core runs in the NetworkExtension process, providing background operation and TUN virtual interface support. Installed via TrollStore with ad-hoc signing.", comment: "VPN description")
         disclaimer.font = .preferredFont(forTextStyle: .caption1)
         disclaimer.textColor = .tertiaryLabel
         disclaimer.numberOfLines = 0

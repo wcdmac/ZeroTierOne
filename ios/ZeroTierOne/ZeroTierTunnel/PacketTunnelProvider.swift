@@ -1,6 +1,11 @@
 import NetworkExtension
 import Foundation
 
+enum TunnelError: Error {
+    case badConfiguration
+    case timeout
+}
+
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var nodeBridge: ZTNodeBridge!
@@ -12,7 +17,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         NSLog("[ZT-Tunnel] startTunnel called")
 
-        let networkId = protocolConfiguration.providerConfiguration?["networkId"] as? String ?? ""
+        let providerConfig = protocolConfiguration.providerConfiguration
+        let networkId = (providerConfig?["networkId"] as? String) ?? ""
 
         let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
         let dataPath = (containerURL?.path ?? NSTemporaryDirectory()) + "/zerotier"
@@ -42,7 +48,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         if !nodeBridge.startNode() {
             NSLog("[ZT-Tunnel] Failed to start node")
-            completionHandler(PacketTunnelError.badConfiguration)
+            completionHandler(TunnelError.badConfiguration)
             return
         }
 

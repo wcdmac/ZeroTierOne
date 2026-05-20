@@ -12,7 +12,6 @@ BUILD_DIR="$PROJECT_DIR/build"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 APPEX_DIR="$BUILD_DIR/$TUNNEL_NAME.appex"
 OBJ_DIR="$BUILD_DIR/objs"
-TUNNEL_OBJ_DIR="$BUILD_DIR/tunnel_objs"
 
 echo "=== Building ZeroTier One iOS App with NEPacketTunnelProvider ==="
 echo "SDK: $SDK"
@@ -22,7 +21,6 @@ echo "Min iOS Version: $MIN_VERSION"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OBJ_DIR"
-mkdir -p "$TUNNEL_OBJ_DIR"
 mkdir -p "$APP_DIR"
 mkdir -p "$APPEX_DIR"
 
@@ -46,11 +44,11 @@ clang++ \
     -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/core/include" \
     -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/simpleapi/include" \
     -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/3rdparty/http-client-lite/include" \
-    -o "$TUNNEL_OBJ_DIR/ZTNodeBridge.o" \
+    -o "$OBJ_DIR/ZTNodeBridge.o" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZTNodeBridge.mm"
+echo "ZTNodeBridge.o compiled successfully"
 
-echo "--- Step 1b: Compile PacketTunnelProvider.swift ---"
-mkdir -p "$TUNNEL_OBJ_DIR/swift"
+echo "--- Step 1b: Compile and link ZeroTierTunnel ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -58,39 +56,26 @@ swiftc \
     -module-name ZeroTierTunnel \
     -parse-as-library \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel-Bridging-Header.h" \
-    -emit-object \
-    -j 1 \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
-
-echo "--- Step 1c: Link ZeroTierTunnel executable ---"
-TUNNEL_SWIFT_OBJS=$(find "$TUNNEL_OBJ_DIR/swift" -name "*.o" ! -name "ZTNodeBridge.o" 2>/dev/null)
-if [ -z "$TUNNEL_SWIFT_OBJS" ]; then
-    TUNNEL_SWIFT_OBJS=$(find . -name "*.o" -path "*/swift/*" 2>/dev/null | grep -v ZTNodeBridge)
-fi
-echo "Tunnel Swift objects: $TUNNEL_SWIFT_OBJS"
-
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
     -Xlinker -force_load \
     -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
+    "$OBJ_DIR/ZTNodeBridge.o" \
     -lc++ \
     -framework NetworkExtension \
     -framework Foundation \
     -o "$APPEX_DIR/$TUNNEL_NAME" \
-    $TUNNEL_SWIFT_OBJS \
-    "$TUNNEL_OBJ_DIR/ZTNodeBridge.o"
+    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
+echo "ZeroTierTunnel linked successfully"
 
-echo "--- Step 1d: Ad-hoc code sign extension ---"
+echo "--- Step 1c: Ad-hoc code sign extension ---"
 codesign --force --sign - \
     --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
     "$APPEX_DIR/$TUNNEL_NAME"
 echo "Extension code signature embedded with entitlements"
 
-echo "--- Step 1e: Create extension PkgInfo ---"
+echo "--- Step 1d: Create extension PkgInfo ---"
 printf "XPC!????" > "$APPEX_DIR/PkgInfo"
 
-echo "--- Step 1f: Process extension Info.plist ---"
+echo "--- Step 1e: Process extension Info.plist ---"
 plutil -convert binary1 -o "$APPEX_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" "$APPEX_DIR/Info.plist"
 
@@ -98,8 +83,7 @@ echo ""
 echo "=== Phase 2: Build Main App (ZeroTierOne.app) ==="
 echo ""
 
-echo "--- Step 2a: Compile Swift sources ---"
-mkdir -p "$OBJ_DIR/swift"
+echo "--- Step 2a: Compile and link main app ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -107,46 +91,33 @@ swiftc \
     -module-name ZeroTierOne \
     -parse-as-library \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
-    -emit-object \
-    -j 1 \
-    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
-    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
-    "$PROJECT_DIR/ZeroTierOne/ViewController.swift" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.swift"
-
-echo "--- Step 2b: Link main app executable ---"
-SWIFT_OBJS=$(find "$OBJ_DIR/swift" -name "*.o" 2>/dev/null)
-if [ -z "$SWIFT_OBJS" ]; then
-    SWIFT_OBJS=$(find . -name "*.o" ! -name "ZTNodeBridge.o" ! -path "*/tunnel_objs/*" 2>/dev/null)
-fi
-echo "Main app Swift objects: $SWIFT_OBJS"
-
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
     -framework UIKit \
     -framework Foundation \
     -framework CoreGraphics \
     -framework QuartzCore \
     -framework NetworkExtension \
     -o "$APP_DIR/$APP_NAME" \
-    $SWIFT_OBJS
+    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
+    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
+    "$PROJECT_DIR/ZeroTierOne/ViewController.swift" \
+    "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.swift"
+echo "Main app linked successfully"
 
-echo "--- Step 2c: Ad-hoc code sign main app ---"
+echo "--- Step 2b: Ad-hoc code sign main app ---"
 codesign --force --sign - \
     --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
     "$APP_DIR/$APP_NAME"
 echo "Main app code signature embedded with entitlements"
 codesign -d --entitlements - "$APP_DIR/$APP_NAME" 2>&1 | head -20 || true
 
-echo "--- Step 2d: Create PkgInfo ---"
+echo "--- Step 2c: Create PkgInfo ---"
 printf "APPL????" > "$APP_DIR/PkgInfo"
 
-echo "--- Step 2e: Process Info.plist ---"
+echo "--- Step 2d: Process Info.plist ---"
 plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
-echo "--- Step 2f: Copy resources ---"
+echo "--- Step 2e: Copy resources ---"
 cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
 
 mkdir -p "$APP_DIR/zh-Hans.lproj"

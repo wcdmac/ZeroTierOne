@@ -19,13 +19,27 @@ echo "Architecture: $ARCH"
 echo "Min iOS Version: $MIN_VERSION"
 
 echo ""
-echo "=== DIAGNOSTIC: Check NetworkExtension framework for NEProviderMain ==="
-NE_FW="$SDK/System/Library/Frameworks/NetworkExtension.framework"
-if [ -f "$NE_FW/NetworkExtension.tbd" ]; then
-    echo "--- Checking TBD file for NEProviderMain ---"
-    grep -c "NEProviderMain" "$NE_FW/NetworkExtension.tbd" 2>/dev/null && echo "NEProviderMain FOUND in TBD" || echo "NEProviderMain NOT in TBD file"
-    echo "--- All NEProvider* symbols in TBD ---"
-    grep "NEProvider" "$NE_FW/NetworkExtension.tbd" 2>/dev/null | head -20 || echo "No NEProvider symbols found"
+echo "=== DIAGNOSTIC: Find NEProviderMain symbol location ==="
+echo "--- Search iOS SDK TBD files ---"
+find "$SDK" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in iOS SDK TBDs"
+
+echo "--- Search Xcode toolchain TBD/dylib files ---"
+TOOLCHAIN_DIR=$(xcrun --find clang | sed 's|/bin/clang||')
+find "$TOOLCHAIN_DIR" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in toolchain TBDs"
+
+echo "--- Search entire Xcode for NEProviderMain ---"
+find /Applications/Xcode_15.4.app -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null | head -10 || echo "Not found anywhere in Xcode"
+
+echo "--- Search macOS SDK TBD files ---"
+MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || echo "")
+if [ -n "$MACOS_SDK" ] && [ -d "$MACOS_SDK" ]; then
+    find "$MACOS_SDK" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in macOS SDK TBDs"
+fi
+
+echo "--- Check NetworkExtension TBD exports section ---"
+if [ -f "$SDK/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension.tbd" ]; then
+    echo "=== Full TBD content (first 100 lines) ==="
+    head -100 "$SDK/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension.tbd"
 fi
 
 echo "--- Checking NEProvider.h header for NEProviderMain ---"

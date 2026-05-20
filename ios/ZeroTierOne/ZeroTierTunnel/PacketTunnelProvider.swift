@@ -7,13 +7,13 @@ enum TunnelError: Error {
 }
 
 @_silgen_name("NEProviderMain")
-func _NEProviderMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>>?) -> Int32
+func _NEProviderMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>>) -> Int32
 
 @main
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     static func main() {
-        _ = _NEProviderMain(CommandLine.argc, CommandLine.unsafeArgv)
+        _ = _NEProviderMain(CommandLine.argc, CommandLine.unsafeArgv!)
     }
 
     private var nodeBridge: ZTNodeBridge?

@@ -773,7 +773,7 @@ static void nodeThreadFunc() {
     int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
 
     std::lock_guard<std::mutex> lock(s_nodeMutex);
-    ZT_Node_processVirtualNetworkFrame(s_node, nullptr, nwid, mac, 0xffffffffffffULL,
+    ZT_Node_processVirtualNetworkFrame(s_node, nullptr, now, nwid, mac, 0xffffffffffffULL,
                                         etherType, 0,
                                         frameData.bytes, (unsigned int)frameData.length,
                                         &s_nextBackgroundTaskDeadline);

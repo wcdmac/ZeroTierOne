@@ -20,6 +20,9 @@ TUNNEL_BUILD_CFG_DEBUG = genid()
 TUNNEL_BUILD_CFG_RELEASE = genid()
 APP_CFG_LIST = genid()
 TUNNEL_CFG_LIST = genid()
+PROJECT_CFG_LIST = genid()
+PROJECT_CFG_DEBUG = genid()
+PROJECT_CFG_RELEASE = genid()
 PBX_PROJECT = genid()
 PBX_BUILD_FILE_APP = genid()
 PBX_BUILD_FILE_TUNNEL = genid()
@@ -238,7 +241,7 @@ pbxproj = f"""// !$*UTF8*$!
 					}};
 				}};
 			}};
-			buildConfigurationList = {genid()} /* Build configuration list for PBXProject "ZeroTierOne" */;
+			buildConfigurationList = {PROJECT_CFG_LIST} /* Build configuration list for PBXProject "ZeroTierOne" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -291,6 +294,22 @@ pbxproj = f"""// !$*UTF8*$!
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		{PROJECT_CFG_DEBUG} /* Debug (Project) */ = {{
+			isa = XCBuildConfiguration;
+			buildSettings = {{
+				IPHONEOS_DEPLOYMENT_TARGET = {MIN_VER};
+				SDKROOT = iphoneos;
+			}};
+			name = Debug;
+		}};
+		{PROJECT_CFG_RELEASE} /* Release (Project) */ = {{
+			isa = XCBuildConfiguration;
+			buildSettings = {{
+				IPHONEOS_DEPLOYMENT_TARGET = {MIN_VER};
+				SDKROOT = iphoneos;
+			}};
+			name = Release;
+		}};
 		{APP_BUILD_CFG_DEBUG} /* Debug */ = {{
 			isa = XCBuildConfiguration;
 			buildSettings = {{
@@ -400,6 +419,15 @@ pbxproj = f"""// !$*UTF8*$!
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		{PROJECT_CFG_LIST} /* Build configuration list for PBXProject "ZeroTierOne" */ = {{
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				{PROJECT_CFG_DEBUG} /* Debug */,
+				{PROJECT_CFG_RELEASE} /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		}};
 		{APP_CFG_LIST} /* Build configuration list for PBXNativeTarget "ZeroTierOne" */ = {{
 			isa = XCConfigurationList;
 			buildConfigurations = (

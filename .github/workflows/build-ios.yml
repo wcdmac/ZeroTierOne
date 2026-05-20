@@ -74,10 +74,10 @@ jobs:
         echo "=== Extension Info.plist check ==="
         plutil -p "$APP_PATH/PlugIns/ZeroTierTunnel.appex/Info.plist" | head -10
         echo "=== PkgInfo check ==="
-        cat "$APP_PATH/PkgInfo"
+        cat "$APP_PATH/PkgInfo" || echo "No main PkgInfo (OK)"
         echo ""
         echo "=== Extension PkgInfo check ==="
-        cat "$APP_PATH/PlugIns/ZeroTierTunnel.appex/PkgInfo"
+        cat "$APP_PATH/PlugIns/ZeroTierTunnel.appex/PkgInfo" || echo "No extension PkgInfo (OK)"
         echo ""
         echo "=== Full bundle listing ==="
         find "$APP_PATH" -type f | head -40

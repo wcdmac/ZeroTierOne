@@ -62,6 +62,8 @@ swiftc \
     -lc++ \
     -framework NetworkExtension \
     -framework Foundation \
+    -Xlinker -e \
+    -Xlinker _NEProviderMain \
     -o "$APPEX_DIR/$TUNNEL_NAME" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
 echo "ZeroTierTunnel linked successfully"

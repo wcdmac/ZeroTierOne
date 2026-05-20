@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 MIN_VERSION="15.0"
 ARCH="arm64"
 APP_NAME="ZeroTierOne"
@@ -9,260 +8,155 @@ TUNNEL_NAME="ZeroTierTunnel"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$PROJECT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-APP_DIR="$BUILD_DIR/$APP_NAME.app"
-APPEX_DIR="$BUILD_DIR/$TUNNEL_NAME.appex"
-OBJ_DIR="$BUILD_DIR/objs"
 
-echo "=== Building ZeroTier One iOS App with NEPacketTunnelProvider ==="
+echo "=== Building ZeroTier One iOS App with NEPacketTunnelProvider (xcodebuild) ==="
+
+SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 echo "SDK: $SDK"
 echo "Architecture: $ARCH"
 echo "Min iOS Version: $MIN_VERSION"
 
 echo ""
-echo "=== DIAGNOSTIC: Find NEProviderMain symbol location ==="
-echo "--- Search iOS SDK TBD files ---"
-find "$SDK" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in iOS SDK TBDs"
+echo "=== Step 1: Generate Xcode project ==="
+python3 "$PROJECT_DIR/generate_xcode_project.py"
+echo "Xcode project generated"
 
-echo "--- Search Xcode toolchain TBD/dylib files ---"
-TOOLCHAIN_DIR=$(xcrun --find clang | sed 's|/bin/clang||')
-find "$TOOLCHAIN_DIR" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in toolchain TBDs"
+echo ""
+echo "=== Step 2: Build with xcodebuild ==="
+xcodebuild \
+    -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
+    -scheme ZeroTierTunnel \
+    -configuration Release \
+    -sdk iphoneos \
+    -arch arm64 \
+    -derivedDataPath "$BUILD_DIR/DerivedData" \
+    IPHONEOS_DEPLOYMENT_TARGET=$MIN_VERSION \
+    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=YES \
+    DEVELOPMENT_TEAM="" \
+    ENABLE_BITCODE=NO \
+    DEBUG_INFORMATION_FORMAT=dwarf \
+    build \
+    2>&1 | tail -30
 
-echo "--- Search entire Xcode for NEProviderMain ---"
-find /Applications/Xcode_15.4.app -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null | head -10 || echo "Not found anywhere in Xcode"
+echo ""
+echo "=== Step 3: Build main app with xcodebuild ==="
+xcodebuild \
+    -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
+    -scheme ZeroTierOne \
+    -configuration Release \
+    -sdk iphoneos \
+    -arch arm64 \
+    -derivedDataPath "$BUILD_DIR/DerivedData" \
+    IPHONEOS_DEPLOYMENT_TARGET=$MIN_VERSION \
+    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=YES \
+    DEVELOPMENT_TEAM="" \
+    ENABLE_BITCODE=NO \
+    DEBUG_INFORMATION_FORMAT=dwarf \
+    build \
+    2>&1 | tail -30
 
-echo "--- Search macOS SDK TBD files ---"
-MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || echo "")
-if [ -n "$MACOS_SDK" ] && [ -d "$MACOS_SDK" ]; then
-    find "$MACOS_SDK" -name "*.tbd" -exec grep -l "NEProviderMain" {} \; 2>/dev/null || echo "Not found in macOS SDK TBDs"
+echo ""
+echo "=== Step 4: Find and assemble build products ==="
+APPEX_PATH=$(find "$BUILD_DIR/DerivedData" -name "ZeroTierTunnel.appex" -type d | head -1)
+APP_PATH=$(find "$BUILD_DIR/DerivedData" -name "ZeroTierOne.app" -type d ! -path "*/ZeroTierTunnel.appex/*" | head -1)
+
+echo "Extension path: $APPEX_PATH"
+echo "App path: $APP_PATH"
+
+FINAL_APP_DIR="$BUILD_DIR/$APP_NAME.app"
+rm -rf "$FINAL_APP_DIR"
+
+if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: Main app not found in DerivedData!"
+    echo "Searching for build products..."
+    find "$BUILD_DIR/DerivedData" -name "*.app" -type d 2>/dev/null | head -10
+    exit 1
 fi
 
-echo "--- Check NetworkExtension TBD exports section ---"
-if [ -f "$SDK/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension.tbd" ]; then
-    echo "=== Full TBD content (first 100 lines) ==="
-    head -100 "$SDK/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension.tbd"
-fi
+cp -R "$APP_PATH" "$FINAL_APP_DIR"
+echo "Main app copied"
 
-echo "--- Checking NEProvider.h header for NEProviderMain ---"
-NE_HEADER="$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/NEProvider.h"
-if [ -f "$NE_HEADER" ]; then
-    echo "NEProvider.h found at: $NE_HEADER"
-    grep -n "NEProviderMain\|main\|NEProvider" "$NE_HEADER" | head -30
+if [ -n "$APPEX_PATH" ] && [ -d "$APPEX_PATH" ]; then
+    mkdir -p "$FINAL_APP_DIR/PlugIns"
+    cp -R "$APPEX_PATH" "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex"
+    echo "Extension copied to PlugIns"
 else
-    echo "NEProvider.h NOT found, searching..."
-    find "$SDK/System/Library/Frameworks/NetworkExtension.framework" -name "*.h" | head -20
+    echo "WARNING: Extension not found, searching..."
+    find "$BUILD_DIR/DerivedData" -name "*.appex" -type d 2>/dev/null | head -10
 fi
 
-echo "--- Checking NetworkExtension.h umbrella header ---"
-NE_UMBRELLA="$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/NetworkExtension.h"
-if [ -f "$NE_UMBRELLA" ]; then
-    grep -n "NEProviderMain" "$NE_UMBRELLA" || echo "NEProviderMain NOT in umbrella header"
+echo ""
+echo "=== Step 5: Copy resources ==="
+if [ -d "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" ]; then
+    cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$FINAL_APP_DIR/Assets.xcassets"
 fi
 
-echo "--- Listing all NetworkExtension headers ---"
-ls "$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/" | head -30
-
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-mkdir -p "$OBJ_DIR"
-mkdir -p "$APP_DIR"
-mkdir -p "$APPEX_DIR"
-
-COMMON_FLAGS="-target ${ARCH}-apple-ios${MIN_VERSION} -isysroot $SDK -miphoneos-version-min=$MIN_VERSION"
-
-echo ""
-echo "=== Phase 1: Build NetworkExtension (ZeroTierTunnel.appex) ==="
-echo ""
-
-echo "--- Step 1: Compile ZTNodeBridge.mm (ObjC++) ---"
-clang++ \
-    $COMMON_FLAGS \
-    -std=c++17 \
-    -stdlib=libc++ \
-    -fobjc-arc \
-    -c \
-    -I"$ROOT_DIR" \
-    -I"$ROOT_DIR/include" \
-    -I"$ROOT_DIR/osdep" \
-    -I"$ROOT_DIR/ext" \
-    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/core/include" \
-    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/simpleapi/include" \
-    -I"$ROOT_DIR/ext/prometheus-cpp-lite-1.0/3rdparty/http-client-lite/include" \
-    -o "$OBJ_DIR/ZTNodeBridge.o" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZTNodeBridge.mm"
-echo "ZTNodeBridge.o compiled successfully"
-
-echo "--- Step 2: Compile main.m (extension entry point with dlopen/dlsym) ---"
-clang \
-    $COMMON_FLAGS \
-    -fobjc-arc \
-    -c \
-    -o "$OBJ_DIR/main.o" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/main.m"
-echo "main.o compiled successfully"
-
-echo "--- Step 3: Compile and link ZeroTierTunnel ---"
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
-    -Osize \
-    -module-name ZeroTierTunnel \
-    -parse-as-library \
-    -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel-Bridging-Header.h" \
-    -Xlinker -syslibroot \
-    -Xlinker "$SDK" \
-    -Xlinker -force_load \
-    -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
-    "$OBJ_DIR/ZTNodeBridge.o" \
-    "$OBJ_DIR/main.o" \
-    -lc++ \
-    -framework NetworkExtension \
-    -framework Foundation \
-    -o "$APPEX_DIR/$TUNNEL_NAME" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
-echo "ZeroTierTunnel linked successfully"
-
-echo "--- Step 3b: Check ALL undefined symbols in extension ---"
-nm -u "$APPEX_DIR/$TUNNEL_NAME" 2>/dev/null | head -50 || echo "nm failed"
-echo "--- End undefined symbols ---"
-
-echo "--- Step 4: Create extension PkgInfo ---"
-printf "XPC!????" > "$APPEX_DIR/PkgInfo"
-
-echo "--- Step 5: Process extension Info.plist ---"
-plutil -convert binary1 -o "$APPEX_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" "$APPEX_DIR/Info.plist"
-
-echo "--- Step 6: Ad-hoc code sign extension BUNDLE ---"
-codesign --force --sign - \
-    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
-    "$APPEX_DIR"
-echo "Extension bundle code signature embedded with entitlements"
-
-echo ""
-echo "=== Phase 2: Build Main App (ZeroTierOne.app) ==="
-echo ""
-
-echo "--- Step 7: Compile and link main app ---"
-swiftc \
-    -target ${ARCH}-apple-ios${MIN_VERSION} \
-    -sdk "$SDK" \
-    -Osize \
-    -module-name ZeroTierOne \
-    -parse-as-library \
-    -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierOne-Bridging-Header.h" \
-    -framework UIKit \
-    -framework Foundation \
-    -framework CoreGraphics \
-    -framework QuartzCore \
-    -framework NetworkExtension \
-    -o "$APP_DIR/$APP_NAME" \
-    "$PROJECT_DIR/ZeroTierOne/AppDelegate.swift" \
-    "$PROJECT_DIR/ZeroTierOne/SceneDelegate.swift" \
-    "$PROJECT_DIR/ZeroTierOne/ViewController.swift" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.swift"
-echo "Main app linked successfully"
-
-echo "--- Step 8: Create PkgInfo ---"
-printf "APPL????" > "$APP_DIR/PkgInfo"
-
-echo "--- Step 9: Process Info.plist ---"
-plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
-
-echo "--- Step 10: Copy resources ---"
-cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
-
-mkdir -p "$APP_DIR/zh-Hans.lproj"
+mkdir -p "$FINAL_APP_DIR/zh-Hans.lproj"
 if [ -f "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" ]; then
-    plutil -convert binary1 -o "$APP_DIR/zh-Hans.lproj/Localizable.strings" "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" "$APP_DIR/zh-Hans.lproj/Localizable.strings"
+    cp "$PROJECT_DIR/ZeroTierOne/zh-Hans.lproj/Localizable.strings" "$FINAL_APP_DIR/zh-Hans.lproj/Localizable.strings"
 fi
 
-mkdir -p "$APP_DIR/en.lproj"
+mkdir -p "$FINAL_APP_DIR/en.lproj"
 if [ -f "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" ]; then
-    plutil -convert binary1 -o "$APP_DIR/en.lproj/Localizable.strings" "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" 2>/dev/null || \
-    cp "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" "$APP_DIR/en.lproj/Localizable.strings"
+    cp "$PROJECT_DIR/ZeroTierOne/en.lproj/Localizable.strings" "$FINAL_APP_DIR/en.lproj/Localizable.strings"
 fi
 
 echo ""
-echo "=== Phase 3: Assemble App Bundle ==="
-echo ""
+echo "=== Step 6: Re-sign with entitlements ==="
+if [ -d "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" ]; then
+    codesign --force --sign - \
+        --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
+        "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex"
+    echo "Extension re-signed with entitlements"
+fi
 
-echo "--- Step 11: Embed NetworkExtension into PlugIns ---"
-mkdir -p "$APP_DIR/PlugIns"
-cp -R "$APPEX_DIR" "$APP_DIR/PlugIns/$TUNNEL_NAME.appex"
-echo "Extension embedded in PlugIns directory"
-
-echo "--- Step 12: Ad-hoc code sign main app BUNDLE (after embedding extension) ---"
 codesign --force --sign - \
     --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
-    "$APP_DIR"
-echo "Main app bundle code signature embedded with entitlements (includes extension)"
+    "$FINAL_APP_DIR"
+echo "Main app re-signed with entitlements"
 
 echo ""
-echo "=== Phase 4: Verify ==="
-echo ""
-
+echo "=== Step 7: Verify ==="
 echo "--- App bundle contents ---"
-find "$APP_DIR" -type f | while read f; do
+find "$FINAL_APP_DIR" -type f | while read f; do
     SIZE=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "?")
-    echo "  $SIZE bytes  ${f#$APP_DIR/}"
+    echo "  $SIZE bytes  ${f#$FINAL_APP_DIR/}"
 done
 
 echo "--- Main executable info ---"
-file "$APP_DIR/$APP_NAME"
-ls -la "$APP_DIR/$APP_NAME"
+file "$FINAL_APP_DIR/$APP_NAME" 2>/dev/null || true
 
 echo "--- Extension executable info ---"
-file "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME"
-ls -la "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME"
+if [ -d "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" ]; then
+    file "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null || true
+fi
 
 echo "--- Extension linked libraries ---"
-otool -L "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null || true
+if [ -f "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" ]; then
+    otool -L "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null || true
+fi
 
-echo "--- Extension ALL undefined symbols ---"
-nm -u "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null | head -50 || echo "nm failed"
+echo "--- Extension undefined symbols ---"
+if [ -f "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" ]; then
+    nm -u "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null | grep -i "NEProvider" || echo "No NEProvider undefined symbols"
+fi
 
 echo "--- Code signature verification ---"
-codesign -dvv "$APP_DIR" 2>&1 | head -20 || true
-echo "--- Extension signature verification ---"
-codesign -dvv "$APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -20 || true
-
-echo "--- Main app entitlements ---"
-codesign -d --entitlements - "$APP_DIR" 2>&1 | head -25 || true
-echo "--- Extension entitlements ---"
-codesign -d --entitlements - "$APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -25 || true
-
-echo "--- Info.plist check ---"
-if [ -f "$APP_DIR/Info.plist" ]; then
-    echo "Info.plist exists: YES"
-else
-    echo "Info.plist exists: NO - ERROR!"
+codesign -dvv "$FINAL_APP_DIR" 2>&1 | head -15 || true
+if [ -d "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" ]; then
+    codesign -dvv "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -15 || true
 fi
 
-echo "--- Extension Info.plist check ---"
-if [ -f "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/Info.plist" ]; then
-    echo "Extension Info.plist exists: YES"
-else
-    echo "Extension Info.plist exists: NO - ERROR!"
+echo "--- Entitlements ---"
+codesign -d --entitlements - "$FINAL_APP_DIR" 2>&1 | head -20 || true
+if [ -d "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" ]; then
+    codesign -d --entitlements - "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -20 || true
 fi
 
-echo "--- Extension _CodeSignature check ---"
-if [ -d "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/_CodeSignature" ]; then
-    echo "Extension _CodeSignature directory exists: YES"
-    ls -la "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/_CodeSignature/"
-else
-    echo "Extension _CodeSignature directory exists: NO - WARNING"
-fi
-
-echo "--- Main app _CodeSignature check ---"
-if [ -d "$APP_DIR/_CodeSignature" ]; then
-    echo "Main app _CodeSignature directory exists: YES"
-    ls -la "$APP_DIR/_CodeSignature/"
-else
-    echo "Main app _CodeSignature directory exists: NO - WARNING"
-fi
-
-APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)
+APP_SIZE=$(du -sh "$FINAL_APP_DIR" | cut -f1)
 echo "=== App bundle total size: $APP_SIZE ==="
-echo "=== Build complete: $APP_DIR ==="
+echo "=== Build complete: $FINAL_APP_DIR ==="

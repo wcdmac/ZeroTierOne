@@ -60,6 +60,8 @@ swiftc \
     -Xlinker "$SDK" \
     -Xlinker -force_load \
     -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
+    -Xlinker -undefined \
+    -Xlinker dynamic_lookup \
     "$OBJ_DIR/ZTNodeBridge.o" \
     -lc++ \
     -framework NetworkExtension \

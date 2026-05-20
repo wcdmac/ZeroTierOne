@@ -455,4 +455,53 @@ pbxproj = f"""// !$*UTF8*$!
 with open(os.path.join(xcode_dir, "project.pbxproj"), "w") as f:
     f.write(pbxproj)
 
+xcshareddata_dir = os.path.join(xcode_dir, "xcshareddata", "xcschemes")
+os.makedirs(xcshareddata_dir, exist_ok=True)
+
+for scheme_name in ["ZeroTierOne", "ZeroTierTunnel"]:
+    target_uuid = APP_TARGET_UUID if scheme_name == "ZeroTierOne" else TUNNEL_TARGET_UUID
+    scheme_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "1540"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{target_uuid}"
+               BuildableName = "{scheme_name}.app{'ex' if scheme_name == 'ZeroTierTunnel' else ''}"
+               BlueprintName = "{scheme_name}"
+               ReferencedContainer = "container:ZeroTierOne.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+   </LaunchAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
+"""
+    with open(os.path.join(xcshareddata_dir, f"{scheme_name}.xcscheme"), "w") as f:
+        f.write(scheme_xml)
+
 print(f"Generated Xcode project at: {xcode_dir}")

@@ -25,7 +25,7 @@ echo ""
 echo "=== Step 2: Build extension with xcodebuild ==="
 xcodebuild \
     -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
-    -target ZeroTierTunnel \
+    -scheme ZeroTierTunnel \
     -configuration Release \
     -sdk iphoneos \
     -arch arm64 \
@@ -44,7 +44,7 @@ echo ""
 echo "=== Step 3: Build main app with xcodebuild ==="
 xcodebuild \
     -project "$PROJECT_DIR/ZeroTierOne.xcodeproj" \
-    -target ZeroTierOne \
+    -scheme ZeroTierOne \
     -configuration Release \
     -sdk iphoneos \
     -arch arm64 \

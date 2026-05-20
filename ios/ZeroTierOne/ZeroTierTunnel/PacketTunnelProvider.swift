@@ -6,7 +6,6 @@ enum TunnelError: Error {
     case timeout
 }
 
-@main
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var nodeBridge: ZTNodeBridge!

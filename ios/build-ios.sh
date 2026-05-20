@@ -48,7 +48,16 @@ clang++ \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZTNodeBridge.mm"
 echo "ZTNodeBridge.o compiled successfully"
 
-echo "--- Step 1b: Compile and link ZeroTierTunnel ---"
+echo "--- Step 1b: Compile main.m (extension entry point) ---"
+clang \
+    $COMMON_FLAGS \
+    -fobjc-arc \
+    -c \
+    -o "$OBJ_DIR/main.o" \
+    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/main.m"
+echo "main.o compiled successfully"
+
+echo "--- Step 1c: Compile and link ZeroTierTunnel ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -63,6 +72,7 @@ swiftc \
     -Xlinker -undefined \
     -Xlinker dynamic_lookup \
     "$OBJ_DIR/ZTNodeBridge.o" \
+    "$OBJ_DIR/main.o" \
     -lc++ \
     -framework NetworkExtension \
     -framework Foundation \

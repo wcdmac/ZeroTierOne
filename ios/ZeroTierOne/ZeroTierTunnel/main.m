@@ -1,15 +1,9 @@
 #import <Foundation/Foundation.h>
-#import <dlfcn.h>
 
-typedef int (*NEProviderMainFunc)(int, char **);
+extern int NEProviderMain(int argc, char **argv);
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        NEProviderMainFunc neProviderMain = (NEProviderMainFunc)dlsym(RTLD_DEFAULT, "NEProviderMain");
-        if (neProviderMain) {
-            return neProviderMain(argc, argv);
-        }
-        [[NSRunLoop currentRunLoop] run];
+        return NEProviderMain(argc, argv);
     }
-    return 0;
 }

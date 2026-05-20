@@ -28,6 +28,25 @@ if [ -f "$NE_FW/NetworkExtension.tbd" ]; then
     grep "NEProvider" "$NE_FW/NetworkExtension.tbd" 2>/dev/null | head -20 || echo "No NEProvider symbols found"
 fi
 
+echo "--- Checking NEProvider.h header for NEProviderMain ---"
+NE_HEADER="$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/NEProvider.h"
+if [ -f "$NE_HEADER" ]; then
+    echo "NEProvider.h found at: $NE_HEADER"
+    grep -n "NEProviderMain\|main\|NEProvider" "$NE_HEADER" | head -30
+else
+    echo "NEProvider.h NOT found, searching..."
+    find "$SDK/System/Library/Frameworks/NetworkExtension.framework" -name "*.h" | head -20
+fi
+
+echo "--- Checking NetworkExtension.h umbrella header ---"
+NE_UMBRELLA="$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/NetworkExtension.h"
+if [ -f "$NE_UMBRELLA" ]; then
+    grep -n "NEProviderMain" "$NE_UMBRELLA" || echo "NEProviderMain NOT in umbrella header"
+fi
+
+echo "--- Listing all NetworkExtension headers ---"
+ls "$SDK/System/Library/Frameworks/NetworkExtension.framework/Headers/" | head -30
+
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OBJ_DIR"

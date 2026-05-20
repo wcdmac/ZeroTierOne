@@ -278,7 +278,6 @@ pbxproj = f"""// !$*UTF8*$!
 			buildActionMask = 2147483647;
 			files = (
 				{BUILD_FILE_PTP_SWIFT} /* PacketTunnelProvider.swift in Sources */,
-				{BUILD_FILE_MAIN_M} /* main.m in Sources */,
 				{BUILD_FILE_ZTNODEBRIDGE_MM} /* ZTNodeBridge.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

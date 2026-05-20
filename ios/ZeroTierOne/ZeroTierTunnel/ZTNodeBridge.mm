@@ -73,6 +73,7 @@ static void updateSharedStatus() {
 static void statePutFunction(ZT_Node *node, void *uptr, void *tptr,
                               enum ZT_StateObjectType type, const uint64_t id[2],
                               const void *data, int len) {
+    @autoreleasepool {
     NSString *dir = s_dataPath;
     if (!dir) return;
 
@@ -102,11 +103,13 @@ static void statePutFunction(ZT_Node *node, void *uptr, void *tptr,
         [nsData writeToFile:fullPath atomically:YES];
         ztLog([NSString stringWithFormat:@"PUT %@ (%d bytes)", filename, len]);
     }
+    }
 }
 
 static int stateGetFunction(ZT_Node *node, void *uptr, void *tptr,
                              enum ZT_StateObjectType type, const uint64_t id[2],
                              void *data, unsigned int len) {
+    @autoreleasepool {
     NSString *dir = s_dataPath;
     if (!dir) return -1;
 
@@ -131,6 +134,7 @@ static int stateGetFunction(ZT_Node *node, void *uptr, void *tptr,
 
     memcpy(data, nsData.bytes, nsData.length);
     return (int)nsData.length;
+    }
 }
 
 static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -138,6 +142,7 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
                                    const struct sockaddr_storage *remoteAddress,
                                    const void *packetData, unsigned int packetLength,
                                    unsigned int ttl) {
+    @autoreleasepool {
     ssize_t result = -1;
     char addrStr[INET6_ADDRSTRLEN] = {0};
     uint16_t port = 0;
@@ -167,6 +172,7 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
         ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %s:%u errno=%d (%s)", packetLength, addrStr, port, errno, strerror(errno)]);
     }
     return (result >= 0) ? 0 : -1;
+    }
 }
 
 static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -174,9 +180,11 @@ static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
                                          uint64_t sourceMac, uint64_t destMac,
                                          unsigned int etherType, unsigned int vlanId,
                                          const void *frameData, unsigned int frameLength) {
+    @autoreleasepool {
     if (s_sharedBridge && s_sharedBridge.onFrameReceived && frameData && frameLength > 0) {
         NSData *nsData = [NSData dataWithBytes:frameData length:frameLength];
         s_sharedBridge.onFrameReceived(nsData, etherType);
+    }
     }
 }
 
@@ -184,6 +192,7 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
                                           uint64_t nwid, void **nuptr,
                                           enum ZT_VirtualNetworkConfigOperation op,
                                           const ZT_VirtualNetworkConfig *config) {
+    @autoreleasepool {
     const char *opStr = "UNKNOWN";
     switch (op) {
         case ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_UP: opStr = "UP"; break;
@@ -265,10 +274,12 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
     }
 
     return 0;
+    }
 }
 
 static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
                            enum ZT_Event event, const void *metaData) {
+    @autoreleasepool {
     const char *eventName = "UNKNOWN";
     switch (event) {
         case ZT_EVENT_UP: eventName = "UP"; break;
@@ -311,6 +322,7 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
         }
         default:
             break;
+    }
     }
 }
 
@@ -365,6 +377,7 @@ static void nodeThreadFunc() {
     int bgTaskCount = 0;
 
     while (s_nodeRunning) {
+        @autoreleasepool {
         int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
 
         {
@@ -458,6 +471,7 @@ static void nodeThreadFunc() {
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        }
         }
     }
 

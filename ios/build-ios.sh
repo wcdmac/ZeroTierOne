@@ -18,6 +18,16 @@ echo "SDK: $SDK"
 echo "Architecture: $ARCH"
 echo "Min iOS Version: $MIN_VERSION"
 
+echo ""
+echo "=== DIAGNOSTIC: Check NetworkExtension framework for NEProviderMain ==="
+NE_FW="$SDK/System/Library/Frameworks/NetworkExtension.framework"
+if [ -f "$NE_FW/NetworkExtension.tbd" ]; then
+    echo "--- Checking TBD file for NEProviderMain ---"
+    grep -c "NEProviderMain" "$NE_FW/NetworkExtension.tbd" 2>/dev/null && echo "NEProviderMain FOUND in TBD" || echo "NEProviderMain NOT in TBD file"
+    echo "--- All NEProvider* symbols in TBD ---"
+    grep "NEProvider" "$NE_FW/NetworkExtension.tbd" 2>/dev/null | head -20 || echo "No NEProvider symbols found"
+fi
+
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OBJ_DIR"
@@ -48,13 +58,21 @@ clang++ \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZTNodeBridge.mm"
 echo "ZTNodeBridge.o compiled successfully"
 
-echo "--- Step 2: Compile and link ZeroTierTunnel ---"
+echo "--- Step 2: Compile main.m (extension entry point with dlopen/dlsym) ---"
+clang \
+    $COMMON_FLAGS \
+    -fobjc-arc \
+    -c \
+    -o "$OBJ_DIR/main.o" \
+    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/main.m"
+echo "main.o compiled successfully"
+
+echo "--- Step 3: Compile and link ZeroTierTunnel ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
     -Osize \
     -module-name ZeroTierTunnel \
-    -parse-as-library \
     -import-objc-header "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel-Bridging-Header.h" \
     -Xlinker -syslibroot \
     -Xlinker "$SDK" \
@@ -63,18 +81,13 @@ swiftc \
     -Xlinker -undefined \
     -Xlinker dynamic_lookup \
     "$OBJ_DIR/ZTNodeBridge.o" \
+    "$OBJ_DIR/main.o" \
     -lc++ \
     -framework NetworkExtension \
     -framework Foundation \
     -o "$APPEX_DIR/$TUNNEL_NAME" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
 echo "ZeroTierTunnel linked successfully"
-
-echo "--- Step 3: Ad-hoc code sign extension ---"
-codesign --force --sign - \
-    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
-    "$APPEX_DIR/$TUNNEL_NAME"
-echo "Extension code signature embedded with entitlements"
 
 echo "--- Step 4: Create extension PkgInfo ---"
 printf "XPC!????" > "$APPEX_DIR/PkgInfo"
@@ -83,11 +96,17 @@ echo "--- Step 5: Process extension Info.plist ---"
 plutil -convert binary1 -o "$APPEX_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" "$APPEX_DIR/Info.plist"
 
+echo "--- Step 6: Ad-hoc code sign extension BUNDLE ---"
+codesign --force --sign - \
+    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
+    "$APPEX_DIR"
+echo "Extension bundle code signature embedded with entitlements"
+
 echo ""
 echo "=== Phase 2: Build Main App (ZeroTierOne.app) ==="
 echo ""
 
-echo "--- Step 6: Compile and link main app ---"
+echo "--- Step 7: Compile and link main app ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -106,13 +125,6 @@ swiftc \
     "$PROJECT_DIR/ZeroTierOne/ViewController.swift" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.swift"
 echo "Main app linked successfully"
-
-echo "--- Step 7: Ad-hoc code sign main app ---"
-codesign --force --sign - \
-    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
-    "$APP_DIR/$APP_NAME"
-echo "Main app code signature embedded with entitlements"
-codesign -d --entitlements - "$APP_DIR/$APP_NAME" 2>&1 | head -20 || true
 
 echo "--- Step 8: Create PkgInfo ---"
 printf "APPL????" > "$APP_DIR/PkgInfo"
@@ -145,8 +157,11 @@ mkdir -p "$APP_DIR/PlugIns"
 cp -R "$APPEX_DIR" "$APP_DIR/PlugIns/$TUNNEL_NAME.appex"
 echo "Extension embedded in PlugIns directory"
 
-echo "--- Step 12: Verify extension code signature ---"
-codesign -d --entitlements - "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>&1 | head -20 || true
+echo "--- Step 12: Ad-hoc code sign main app BUNDLE (after embedding extension) ---"
+codesign --force --sign - \
+    --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
+    "$APP_DIR"
+echo "Main app bundle code signature embedded with entitlements (includes extension)"
 
 echo ""
 echo "=== Phase 4: Verify ==="
@@ -166,13 +181,25 @@ echo "--- Extension executable info ---"
 file "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME"
 ls -la "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME"
 
-echo "--- Code signature info ---"
-codesign -dvv "$APP_DIR/$APP_NAME" 2>&1 | head -15 || true
+echo "--- Extension linked libraries ---"
+otool -L "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null || true
+
+echo "--- Extension undefined symbols (NEProvider*) ---"
+nm -u "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null | grep -i "NEProvider" || echo "No NEProvider undefined symbols"
+
+echo "--- Code signature verification ---"
+codesign -dvv "$APP_DIR" 2>&1 | head -20 || true
+echo "--- Extension signature verification ---"
+codesign -dvv "$APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -20 || true
+
+echo "--- Main app entitlements ---"
+codesign -d --entitlements - "$APP_DIR" 2>&1 | head -25 || true
+echo "--- Extension entitlements ---"
+codesign -d --entitlements - "$APP_DIR/PlugIns/$TUNNEL_NAME.appex" 2>&1 | head -25 || true
 
 echo "--- Info.plist check ---"
 if [ -f "$APP_DIR/Info.plist" ]; then
     echo "Info.plist exists: YES"
-    plutil -p "$APP_DIR/Info.plist" 2>/dev/null | head -5 || echo "(binary plist)"
 else
     echo "Info.plist exists: NO - ERROR!"
 fi
@@ -180,9 +207,24 @@ fi
 echo "--- Extension Info.plist check ---"
 if [ -f "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/Info.plist" ]; then
     echo "Extension Info.plist exists: YES"
-    plutil -p "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/Info.plist" 2>/dev/null | head -5 || echo "(binary plist)"
 else
     echo "Extension Info.plist exists: NO - ERROR!"
+fi
+
+echo "--- Extension _CodeSignature check ---"
+if [ -d "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/_CodeSignature" ]; then
+    echo "Extension _CodeSignature directory exists: YES"
+    ls -la "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/_CodeSignature/"
+else
+    echo "Extension _CodeSignature directory exists: NO - WARNING"
+fi
+
+echo "--- Main app _CodeSignature check ---"
+if [ -d "$APP_DIR/_CodeSignature" ]; then
+    echo "Main app _CodeSignature directory exists: YES"
+    ls -la "$APP_DIR/_CodeSignature/"
+else
+    echo "Main app _CodeSignature directory exists: NO - WARNING"
 fi
 
 APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)

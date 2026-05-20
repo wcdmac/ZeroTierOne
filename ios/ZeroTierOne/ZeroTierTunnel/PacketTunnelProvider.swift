@@ -6,7 +6,12 @@ enum TunnelError: Error {
     case timeout
 }
 
+@main
 class PacketTunnelProvider: NEPacketTunnelProvider {
+
+    static func main() {
+        NEProvider.main()
+    }
 
     private var nodeBridge: ZTNodeBridge?
     private var tunnelReady = false
@@ -16,6 +21,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         NSLog("[ZT-Tunnel] ========== startTunnel called ==========")
+        NSLog("[ZT-Tunnel] PID: %d", getpid())
 
         let tunnelProto = protocolConfiguration as? NETunnelProviderProtocol
         let providerConfig = tunnelProto?.providerConfiguration
@@ -25,14 +31,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let dataPath: String
         if let containerURL = containerURL {
             dataPath = containerURL.path + "/zerotier"
-            NSLog("[ZT-Tunnel] Using App Group container: %@", dataPath)
+            NSLog("[ZT-Tunnel] App Group container: %@", dataPath)
         } else {
             dataPath = NSTemporaryDirectory() + "/zerotier"
             NSLog("[ZT-Tunnel] WARNING: App Group container nil, using temp: %@", dataPath)
         }
 
         NSLog("[ZT-Tunnel] Network ID: '%@'", networkId)
-        NSLog("[ZT-Tunnel] Process PID: %d", getpid())
 
         startCompleter = completionHandler
 
@@ -52,7 +57,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
 
-            NSLog("[ZT-Tunnel] Initial network settings applied, now starting ZeroTier node...")
+            NSLog("[ZT-Tunnel] Initial network settings applied, starting ZeroTier node...")
             self.tunnelReady = true
             self.completeStart(error: nil)
             self.startZeroTierNode(dataPath: dataPath, networkId: networkId)
@@ -94,7 +99,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         if !bridge.startNode() {
-            NSLog("[ZT-Tunnel] Failed to start ZeroTier node - tunnel will remain active but without ZeroTier connectivity")
+            NSLog("[ZT-Tunnel] Failed to start ZeroTier node")
             return
         }
 

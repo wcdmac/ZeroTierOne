@@ -30,7 +30,7 @@ echo ""
 echo "=== Phase 1: Build NetworkExtension (ZeroTierTunnel.appex) ==="
 echo ""
 
-echo "--- Step 1a: Compile ZTNodeBridge.mm (ObjC++) ---"
+echo "--- Step 1: Compile ZTNodeBridge.mm (ObjC++) ---"
 clang++ \
     $COMMON_FLAGS \
     -std=c++17 \
@@ -48,16 +48,7 @@ clang++ \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZTNodeBridge.mm"
 echo "ZTNodeBridge.o compiled successfully"
 
-echo "--- Step 1b: Compile main.m (extension entry point) ---"
-clang \
-    $COMMON_FLAGS \
-    -fobjc-arc \
-    -c \
-    -o "$OBJ_DIR/main.o" \
-    "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/main.m"
-echo "main.o compiled successfully"
-
-echo "--- Step 1c: Compile and link ZeroTierTunnel ---"
+echo "--- Step 2: Compile and link ZeroTierTunnel ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -69,10 +60,7 @@ swiftc \
     -Xlinker "$SDK" \
     -Xlinker -force_load \
     -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
-    -Xlinker -undefined \
-    -Xlinker dynamic_lookup \
     "$OBJ_DIR/ZTNodeBridge.o" \
-    "$OBJ_DIR/main.o" \
     -lc++ \
     -framework NetworkExtension \
     -framework Foundation \
@@ -80,16 +68,16 @@ swiftc \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
 echo "ZeroTierTunnel linked successfully"
 
-echo "--- Step 1c: Ad-hoc code sign extension ---"
+echo "--- Step 3: Ad-hoc code sign extension ---"
 codesign --force --sign - \
     --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/ZeroTierTunnel.entitlements" \
     "$APPEX_DIR/$TUNNEL_NAME"
 echo "Extension code signature embedded with entitlements"
 
-echo "--- Step 1d: Create extension PkgInfo ---"
+echo "--- Step 4: Create extension PkgInfo ---"
 printf "XPC!????" > "$APPEX_DIR/PkgInfo"
 
-echo "--- Step 1e: Process extension Info.plist ---"
+echo "--- Step 5: Process extension Info.plist ---"
 plutil -convert binary1 -o "$APPEX_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/Info.plist" "$APPEX_DIR/Info.plist"
 
@@ -97,7 +85,7 @@ echo ""
 echo "=== Phase 2: Build Main App (ZeroTierOne.app) ==="
 echo ""
 
-echo "--- Step 2a: Compile and link main app ---"
+echo "--- Step 6: Compile and link main app ---"
 swiftc \
     -target ${ARCH}-apple-ios${MIN_VERSION} \
     -sdk "$SDK" \
@@ -117,21 +105,21 @@ swiftc \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierBridge.swift"
 echo "Main app linked successfully"
 
-echo "--- Step 2b: Ad-hoc code sign main app ---"
+echo "--- Step 7: Ad-hoc code sign main app ---"
 codesign --force --sign - \
     --entitlements "$PROJECT_DIR/ZeroTierOne/ZeroTierOne.entitlements" \
     "$APP_DIR/$APP_NAME"
 echo "Main app code signature embedded with entitlements"
 codesign -d --entitlements - "$APP_DIR/$APP_NAME" 2>&1 | head -20 || true
 
-echo "--- Step 2c: Create PkgInfo ---"
+echo "--- Step 8: Create PkgInfo ---"
 printf "APPL????" > "$APP_DIR/PkgInfo"
 
-echo "--- Step 2d: Process Info.plist ---"
+echo "--- Step 9: Process Info.plist ---"
 plutil -convert binary1 -o "$APP_DIR/Info.plist" "$PROJECT_DIR/ZeroTierOne/Info.plist" 2>/dev/null || \
     cp "$PROJECT_DIR/ZeroTierOne/Info.plist" "$APP_DIR/Info.plist"
 
-echo "--- Step 2e: Copy resources ---"
+echo "--- Step 10: Copy resources ---"
 cp -R "$PROJECT_DIR/ZeroTierOne/Assets.xcassets" "$APP_DIR/Assets.xcassets"
 
 mkdir -p "$APP_DIR/zh-Hans.lproj"
@@ -150,12 +138,12 @@ echo ""
 echo "=== Phase 3: Assemble App Bundle ==="
 echo ""
 
-echo "--- Step 3a: Embed NetworkExtension into PlugIns ---"
+echo "--- Step 11: Embed NetworkExtension into PlugIns ---"
 mkdir -p "$APP_DIR/PlugIns"
 cp -R "$APPEX_DIR" "$APP_DIR/PlugIns/$TUNNEL_NAME.appex"
 echo "Extension embedded in PlugIns directory"
 
-echo "--- Step 3b: Verify extension code signature ---"
+echo "--- Step 12: Verify extension code signature ---"
 codesign -d --entitlements - "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>&1 | head -20 || true
 
 echo ""

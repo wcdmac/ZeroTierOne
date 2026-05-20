@@ -383,6 +383,15 @@ static void nodeThreadFunc() {
 
 @implementation ZeroTierBridge
 
++ (instancetype)sharedInstance {
+    static ZeroTierBridge *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[ZeroTierBridge alloc] init];
+    });
+    return instance;
+}
+
 - (instancetype)init {
     self = [super init];
     if (self) {

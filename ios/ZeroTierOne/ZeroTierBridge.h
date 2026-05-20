@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onOnlineStatusChange)(BOOL online);
 @property (nonatomic, copy, nullable) void (^onLogUpdate)(void);
 
++ (instancetype)sharedInstance;
+
 - (NSString *)nodeId;
 - (BOOL)isNodeOnline;
 - (BOOL)isNodeRunning;

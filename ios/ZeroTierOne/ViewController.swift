@@ -53,7 +53,7 @@ class NetworkViewController: UIViewController {
     private var statusImageView: UIImageView!
     private var statsLabel: UILabel!
 
-    private let ztBridge = ZeroTierBridge()
+    private let ztBridge = ZeroTierBridge.sharedInstance()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -287,7 +287,7 @@ extension NetworkViewController: UITableViewDataSource, UITableViewDelegate {
 
 class IdentityViewController: UIViewController {
 
-    private let ztBridge = ZeroTierBridge()
+    private let ztBridge = ZeroTierBridge.sharedInstance()
     private var textView: UITextView!
 
     override func viewDidLoad() {
@@ -370,7 +370,7 @@ class IdentityViewController: UIViewController {
 
 class LogViewController: UIViewController {
 
-    private let ztBridge = ZeroTierBridge()
+    private let ztBridge = ZeroTierBridge.sharedInstance()
     private var tableView: UITableView!
     private var logEntries: [String] = []
     private var refreshTimer: Timer?

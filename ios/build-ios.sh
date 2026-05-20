@@ -79,8 +79,6 @@ swiftc \
     -Xlinker "$SDK" \
     -Xlinker -force_load \
     -Xlinker "$ROOT_DIR/libzerotiercore-ios.a" \
-    -Xlinker -undefined \
-    -Xlinker dynamic_lookup \
     "$OBJ_DIR/ZTNodeBridge.o" \
     "$OBJ_DIR/main.o" \
     -lc++ \
@@ -89,6 +87,10 @@ swiftc \
     -o "$APPEX_DIR/$TUNNEL_NAME" \
     "$PROJECT_DIR/ZeroTierOne/ZeroTierTunnel/PacketTunnelProvider.swift"
 echo "ZeroTierTunnel linked successfully"
+
+echo "--- Step 3b: Check ALL undefined symbols in extension ---"
+nm -u "$APPEX_DIR/$TUNNEL_NAME" 2>/dev/null | head -50 || echo "nm failed"
+echo "--- End undefined symbols ---"
 
 echo "--- Step 4: Create extension PkgInfo ---"
 printf "XPC!????" > "$APPEX_DIR/PkgInfo"
@@ -185,8 +187,8 @@ ls -la "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME"
 echo "--- Extension linked libraries ---"
 otool -L "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null || true
 
-echo "--- Extension undefined symbols (NEProvider*) ---"
-nm -u "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null | grep -i "NEProvider" || echo "No NEProvider undefined symbols"
+echo "--- Extension ALL undefined symbols ---"
+nm -u "$APP_DIR/PlugIns/$TUNNEL_NAME.appex/$TUNNEL_NAME" 2>/dev/null | head -50 || echo "nm failed"
 
 echo "--- Code signature verification ---"
 codesign -dvv "$APP_DIR" 2>&1 | head -20 || true

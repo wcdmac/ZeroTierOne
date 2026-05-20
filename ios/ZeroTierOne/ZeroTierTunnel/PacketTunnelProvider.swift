@@ -17,7 +17,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         NSLog("[ZT-Tunnel] startTunnel called")
 
-        let providerConfig = protocolConfiguration.providerConfiguration
+        let tunnelProto = protocolConfiguration as? NETunnelProviderProtocol
+        let providerConfig = tunnelProto?.providerConfiguration
         let networkId = (providerConfig?["networkId"] as? String) ?? ""
 
         let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)

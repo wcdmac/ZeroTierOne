@@ -61,10 +61,8 @@ xcodebuild \
 
 echo ""
 echo "=== Step 4: Find and assemble build products ==="
-APPEX_PATH=$(find "$BUILD_DIR/DerivedData" -name "ZeroTierTunnel.appex" -type d | head -1)
 APP_PATH=$(find "$BUILD_DIR/DerivedData" -name "ZeroTierOne.app" -type d ! -path "*/ZeroTierTunnel.appex/*" | head -1)
 
-echo "Extension path: $APPEX_PATH"
 echo "App path: $APP_PATH"
 
 FINAL_APP_DIR="$BUILD_DIR/$APP_NAME.app"
@@ -78,16 +76,7 @@ if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
 fi
 
 cp -R "$APP_PATH" "$FINAL_APP_DIR"
-echo "Main app copied"
-
-if [ -n "$APPEX_PATH" ] && [ -d "$APPEX_PATH" ]; then
-    mkdir -p "$FINAL_APP_DIR/PlugIns"
-    cp -R "$APPEX_PATH" "$FINAL_APP_DIR/PlugIns/$TUNNEL_NAME.appex"
-    echo "Extension copied to PlugIns"
-else
-    echo "WARNING: Extension not found, searching..."
-    find "$BUILD_DIR/DerivedData" -name "*.appex" -type d 2>/dev/null | head -10
-fi
+echo "Main app copied (includes embedded extension)"
 
 echo ""
 echo "=== Step 5: Copy resources ==="

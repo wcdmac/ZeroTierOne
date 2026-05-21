@@ -18,6 +18,9 @@
 #include <node/Identity.hpp>
 #include <node/Utils.hpp>
 
+#include <sys/stat.h>
+#include <dirent.h>
+
 static ZTNodeBridge *s_sharedBridge = nil;
 static std::mutex s_nodeMutex;
 static ZT_Node *s_node = nullptr;
@@ -28,7 +31,7 @@ static std::atomic<uint64_t> s_macAddress(0);
 static std::atomic<uint64_t> s_currentNwid(0);
 static std::thread *s_nodeThread = nullptr;
 static volatile int64_t s_nextBackgroundTaskDeadline = 0;
-static NSString *s_dataPath = nil;
+static std::string s_dataPathStr;
 static int s_udpSock4 = -1;
 static int s_udpSock6 = -1;
 static NSMutableArray<NSString *> *s_logEntries = nil;
@@ -37,18 +40,30 @@ static std::atomic<int64_t> s_lastSendCount(0);
 static std::atomic<int64_t> s_lastRecvCount(0);
 static std::atomic<int64_t> s_lastSendFailCount(0);
 
-static void ztLog(NSString *msg) {
-    NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
-                                                       dateStyle:NSDateFormatterNoStyle
-                                                       timeStyle:NSDateFormatterMediumStyle];
-    NSString *entry = [NSString stringWithFormat:@"[%@] %@", timestamp, msg];
+static void ztLog(const char *msg) {
+    NSLog(@"[ZT-Tunnel] %s", msg);
     {
         std::lock_guard<std::mutex> lock(s_logMutex);
         if (!s_logEntries) s_logEntries = [NSMutableArray new];
+        NSString *entry = [NSString stringWithFormat:@"%s", msg];
         [s_logEntries addObject:entry];
         if (s_logEntries.count > 500) [s_logEntries removeObjectAtIndex:0];
     }
+    if (s_sharedBridge) {
+        if (s_sharedBridge.onLogMessage) {
+            s_sharedBridge.onLogMessage([NSString stringWithUTF8String:msg]);
+        }
+    }
+}
+
+static void ztLog(NSString *msg) {
     NSLog(@"[ZT-Tunnel] %@", msg);
+    {
+        std::lock_guard<std::mutex> lock(s_logMutex);
+        if (!s_logEntries) s_logEntries = [NSMutableArray new];
+        [s_logEntries addObject:msg];
+        if (s_logEntries.count > 500) [s_logEntries removeObjectAtIndex:0];
+    }
     if (s_sharedBridge) {
         if (s_sharedBridge.onLogMessage) {
             s_sharedBridge.onLogMessage(msg);
@@ -70,71 +85,115 @@ static void updateSharedStatus() {
     }
 }
 
+static void mkdirp(const char *path) {
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
 static void statePutFunction(ZT_Node *node, void *uptr, void *tptr,
                               enum ZT_StateObjectType type, const uint64_t id[2],
                               const void *data, int len) {
-    @autoreleasepool {
-    NSString *dir = s_dataPath;
-    if (!dir) return;
+    if (s_dataPathStr.empty()) return;
 
-    NSString *filename = nil;
+    const char *base = s_dataPathStr.c_str();
+    char fullPath[2048];
+    char parentDir[2048];
+
     switch (type) {
-        case ZT_STATE_OBJECT_IDENTITY_SECRET: filename = @"identity.secret"; break;
-        case ZT_STATE_OBJECT_IDENTITY_PUBLIC: filename = @"identity.public"; break;
-        case ZT_STATE_OBJECT_PLANET: filename = @"planet"; break;
+        case ZT_STATE_OBJECT_IDENTITY_SECRET:
+            snprintf(fullPath, sizeof(fullPath), "%s/identity.secret", base);
+            break;
+        case ZT_STATE_OBJECT_IDENTITY_PUBLIC:
+            snprintf(fullPath, sizeof(fullPath), "%s/identity.public", base);
+            break;
+        case ZT_STATE_OBJECT_PLANET:
+            snprintf(fullPath, sizeof(fullPath), "%s/planet", base);
+            break;
         case ZT_STATE_OBJECT_MOON:
-            filename = [NSString stringWithFormat:@"moons.d/%.16llx.moon", id[0]]; break;
+            snprintf(fullPath, sizeof(fullPath), "%s/moons.d/%.16llx.moon", base, (unsigned long long)id[0]);
+            break;
         case ZT_STATE_OBJECT_NETWORK_CONFIG:
-            filename = [NSString stringWithFormat:@"networks.d/%.16llx.conf", id[0]]; break;
+            snprintf(fullPath, sizeof(fullPath), "%s/networks.d/%.16llx.conf", base, (unsigned long long)id[0]);
+            break;
         case ZT_STATE_OBJECT_PEER:
-            filename = [NSString stringWithFormat:@"peers.d/%.16llx", id[0]]; break;
-        default: return;
+            snprintf(fullPath, sizeof(fullPath), "%s/peers.d/%.16llx", base, (unsigned long long)id[0]);
+            break;
+        default:
+            return;
     }
-
-    NSString *fullPath = [dir stringByAppendingPathComponent:filename];
-    NSString *parentDir = [fullPath stringByDeletingLastPathComponent];
-    [[NSFileManager defaultManager] createDirectoryAtPath:parentDir withIntermediateDirectories:YES attributes:nil error:nil];
 
     if (len < 0) {
-        [[NSFileManager defaultManager] removeItemAtPath:fullPath error:nil];
-        ztLog([NSString stringWithFormat:@"DEL %@", filename]);
-    } else if (data && len > 0) {
-        NSData *nsData = [NSData dataWithBytes:data length:(NSUInteger)len];
-        [nsData writeToFile:fullPath atomically:YES];
-        ztLog([NSString stringWithFormat:@"PUT %@ (%d bytes)", filename, len]);
+        unlink(fullPath);
+        return;
     }
+
+    if (!data || len <= 0) return;
+
+    snprintf(parentDir, sizeof(parentDir), "%s", fullPath);
+    char *lastSlash = strrchr(parentDir, '/');
+    if (lastSlash) {
+        *lastSlash = '\0';
+        mkdirp(parentDir);
+    }
+
+    int fd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+
+    ssize_t written = write(fd, data, (size_t)len);
+    close(fd);
+
+    if (written != (ssize_t)len) {
+        unlink(fullPath);
     }
 }
 
 static int stateGetFunction(ZT_Node *node, void *uptr, void *tptr,
                              enum ZT_StateObjectType type, const uint64_t id[2],
                              void *data, unsigned int len) {
-    @autoreleasepool {
-    NSString *dir = s_dataPath;
-    if (!dir) return -1;
+    if (s_dataPathStr.empty()) return -1;
 
-    NSString *filename = nil;
+    const char *base = s_dataPathStr.c_str();
+    char fullPath[2048];
+
     switch (type) {
-        case ZT_STATE_OBJECT_IDENTITY_SECRET: filename = @"identity.secret"; break;
-        case ZT_STATE_OBJECT_IDENTITY_PUBLIC: filename = @"identity.public"; break;
-        case ZT_STATE_OBJECT_PLANET: filename = @"planet"; break;
+        case ZT_STATE_OBJECT_IDENTITY_SECRET:
+            snprintf(fullPath, sizeof(fullPath), "%s/identity.secret", base);
+            break;
+        case ZT_STATE_OBJECT_IDENTITY_PUBLIC:
+            snprintf(fullPath, sizeof(fullPath), "%s/identity.public", base);
+            break;
+        case ZT_STATE_OBJECT_PLANET:
+            snprintf(fullPath, sizeof(fullPath), "%s/planet", base);
+            break;
         case ZT_STATE_OBJECT_MOON:
-            filename = [NSString stringWithFormat:@"moons.d/%.16llx.moon", id[0]]; break;
+            snprintf(fullPath, sizeof(fullPath), "%s/moons.d/%.16llx.moon", base, (unsigned long long)id[0]);
+            break;
         case ZT_STATE_OBJECT_NETWORK_CONFIG:
-            filename = [NSString stringWithFormat:@"networks.d/%.16llx.conf", id[0]]; break;
+            snprintf(fullPath, sizeof(fullPath), "%s/networks.d/%.16llx.conf", base, (unsigned long long)id[0]);
+            break;
         case ZT_STATE_OBJECT_PEER:
-            filename = [NSString stringWithFormat:@"peers.d/%.16llx", id[0]]; break;
-        default: return -1;
+            snprintf(fullPath, sizeof(fullPath), "%s/peers.d/%.16llx", base, (unsigned long long)id[0]);
+            break;
+        default:
+            return -1;
     }
 
-    NSString *fullPath = [dir stringByAppendingPathComponent:filename];
-    NSData *nsData = [NSData dataWithContentsOfFile:fullPath];
-    if (!nsData || nsData.length == 0) return -1;
-    if (nsData.length > len) return -1;
+    int fd = open(fullPath, O_RDONLY);
+    if (fd < 0) return -1;
 
-    memcpy(data, nsData.bytes, nsData.length);
-    return (int)nsData.length;
-    }
+    ssize_t n = read(fd, data, len);
+    close(fd);
+
+    if (n <= 0) return -1;
+    return (int)n;
 }
 
 static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -142,7 +201,6 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
                                    const struct sockaddr_storage *remoteAddress,
                                    const void *packetData, unsigned int packetLength,
                                    unsigned int ttl) {
-    @autoreleasepool {
     ssize_t result = -1;
     char addrStr[INET6_ADDRSTRLEN] = {0};
     uint16_t port = 0;
@@ -160,19 +218,24 @@ static int wirePacketSendFunction(ZT_Node *node, void *uptr, void *tptr,
         result = sendto(s_udpSock6, packetData, packetLength, 0,
                         (const struct sockaddr *)remoteAddress, sizeof(struct sockaddr_in6));
     } else {
-        ztLog([NSString stringWithFormat:@"TX DROP: no socket for family %d", remoteAddress->ss_family]);
+        char logBuf[128];
+        snprintf(logBuf, sizeof(logBuf), "TX DROP: no socket for family %d", remoteAddress->ss_family);
+        ztLog(logBuf);
         return -1;
     }
 
     if (result >= 0) {
         s_lastSendCount++;
-        ztLog([NSString stringWithFormat:@"TX %u bytes -> %s:%u", packetLength, addrStr, port]);
+        char logBuf[256];
+        snprintf(logBuf, sizeof(logBuf), "TX %u bytes -> %s:%u", packetLength, addrStr, port);
+        ztLog(logBuf);
     } else {
         s_lastSendFailCount++;
-        ztLog([NSString stringWithFormat:@"TX FAIL %u bytes -> %s:%u errno=%d (%s)", packetLength, addrStr, port, errno, strerror(errno)]);
+        char logBuf[256];
+        snprintf(logBuf, sizeof(logBuf), "TX FAIL %u bytes -> %s:%u errno=%d (%s)", packetLength, addrStr, port, errno, strerror(errno));
+        ztLog(logBuf);
     }
     return (result >= 0) ? 0 : -1;
-    }
 }
 
 static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
@@ -180,11 +243,11 @@ static void virtualNetworkFrameFunction(ZT_Node *node, void *uptr, void *tptr,
                                          uint64_t sourceMac, uint64_t destMac,
                                          unsigned int etherType, unsigned int vlanId,
                                          const void *frameData, unsigned int frameLength) {
-    @autoreleasepool {
     if (s_sharedBridge && s_sharedBridge.onFrameReceived && frameData && frameLength > 0) {
+        @autoreleasepool {
         NSData *nsData = [NSData dataWithBytes:frameData length:frameLength];
         s_sharedBridge.onFrameReceived(nsData, etherType);
-    }
+        }
     }
 }
 
@@ -192,7 +255,6 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
                                           uint64_t nwid, void **nuptr,
                                           enum ZT_VirtualNetworkConfigOperation op,
                                           const ZT_VirtualNetworkConfig *config) {
-    @autoreleasepool {
     const char *opStr = "UNKNOWN";
     switch (op) {
         case ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_UP: opStr = "UP"; break;
@@ -200,7 +262,9 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
         case ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_DESTROY: opStr = "DESTROY"; break;
         case ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_DOWN: opStr = "DOWN"; break;
     }
-    ztLog([NSString stringWithFormat:@"NET CONFIG: nwid=%.16llx op=%s name=%s managed=%u", nwid, opStr, config->name, config->assignedAddressCount]);
+    char logBuf[256];
+    snprintf(logBuf, sizeof(logBuf), "NET CONFIG: nwid=%.16llx op=%s name=%s managed=%u", nwid, opStr, config->name, config->assignedAddressCount);
+    ztLog(logBuf);
 
     s_currentNwid = nwid;
     s_macAddress = config->mac;
@@ -274,12 +338,10 @@ static int virtualNetworkConfigFunction(ZT_Node *node, void *uptr, void *tptr,
     }
 
     return 0;
-    }
 }
 
 static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
                            enum ZT_Event event, const void *metaData) {
-    @autoreleasepool {
     const char *eventName = "UNKNOWN";
     switch (event) {
         case ZT_EVENT_UP: eventName = "UP"; break;
@@ -293,7 +355,9 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
         default: break;
     }
 
-    ztLog([NSString stringWithFormat:@"EVENT: %s", eventName]);
+    char logBuf[128];
+    snprintf(logBuf, sizeof(logBuf), "EVENT: %s", eventName);
+    ztLog(logBuf);
 
     switch (event) {
         case ZT_EVENT_ONLINE:
@@ -311,18 +375,19 @@ static void eventCallback(ZT_Node *node, void *uptr, void *tptr,
             }
             break;
         case ZT_EVENT_FATAL_ERROR_IDENTITY_COLLISION:
-            ztLog(@"FATAL ERROR: Identity collision!");
+            ztLog("FATAL ERROR: Identity collision!");
             break;
         case ZT_EVENT_REMOTE_TRACE: {
             const ZT_RemoteTrace *rt = (const ZT_RemoteTrace *)metaData;
             if (rt) {
-                ztLog([NSString stringWithFormat:@"REMOTE TRACE: from=%.10llx len=%u", rt->origin, rt->len]);
+                char rtBuf[128];
+                snprintf(rtBuf, sizeof(rtBuf), "REMOTE TRACE: from=%.10llx len=%u", rt->origin, rt->len);
+                ztLog(rtBuf);
             }
             break;
         }
         default:
             break;
-    }
     }
 }
 
@@ -333,52 +398,60 @@ static void logNodeStatus() {
     ZT_Node_status(s_node, &status);
     char addrBuf[11] = {0};
     ZeroTier::Address(status.address).toString(addrBuf);
-    ztLog([NSString stringWithFormat:@"STATUS: addr=%s online=%d", addrBuf, status.online]);
+    char logBuf[128];
+    snprintf(logBuf, sizeof(logBuf), "STATUS: addr=%s online=%d", addrBuf, status.online);
+    ztLog(logBuf);
 
     ZT_PeerList *pl = ZT_Node_peers(s_node);
     if (pl) {
-        ztLog([NSString stringWithFormat:@"PEERS: %lu total", (unsigned long)pl->peerCount]);
+        snprintf(logBuf, sizeof(logBuf), "PEERS: %lu total", (unsigned long)pl->peerCount);
+        ztLog(logBuf);
         for (unsigned int i = 0; i < pl->peerCount && i < 10; i++) {
             ZT_Peer *p = &pl->peers[i];
             char pAddr[11] = {0};
             ZeroTier::Address(p->address).toString(pAddr);
-            ztLog([NSString stringWithFormat:@"  PEER %s: latency=%d paths=%u ver=%u.%u.%u",
+            snprintf(logBuf, sizeof(logBuf), "  PEER %s: latency=%d paths=%u ver=%u.%u.%u",
                    pAddr, p->latency, p->pathCount,
-                   p->versionMajor, p->versionMinor, p->versionRev]);
+                   p->versionMajor, p->versionMinor, p->versionRev);
+            ztLog(logBuf);
             for (unsigned int j = 0; j < p->pathCount && j < 4; j++) {
                 char pathAddr[INET6_ADDRSTRLEN] = {0};
                 if (p->paths[j].address.ss_family == AF_INET) {
                     const struct sockaddr_in *sin = (const struct sockaddr_in *)&p->paths[j].address;
                     inet_ntop(AF_INET, &sin->sin_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: %s:%u pref=%d lastSend=%llu lastRecv=%llu",
+                    snprintf(logBuf, sizeof(logBuf), "    PATH: %s:%u pref=%d lastSend=%llu lastRecv=%llu",
                            pathAddr, ntohs(sin->sin_port), p->paths[j].preferred,
-                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
+                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive);
+                    ztLog(logBuf);
                 } else if (p->paths[j].address.ss_family == AF_INET6) {
                     const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&p->paths[j].address;
                     inet_ntop(AF_INET6, &sin6->sin6_addr, pathAddr, sizeof(pathAddr));
-                    ztLog([NSString stringWithFormat:@"    PATH: [%s]:%u pref=%d lastSend=%llu lastRecv=%llu",
+                    snprintf(logBuf, sizeof(logBuf), "    PATH: [%s]:%u pref=%d lastSend=%llu lastRecv=%llu",
                            pathAddr, ntohs(sin6->sin6_port), p->paths[j].preferred,
-                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive]);
+                           (unsigned long long)p->paths[j].lastSend, (unsigned long long)p->paths[j].lastReceive);
+                    ztLog(logBuf);
                 }
             }
         }
         ZT_Node_freeQueryResult(s_node, pl);
     } else {
-        ztLog(@"PEERS: none");
+        ztLog("PEERS: none");
     }
 
-    ztLog([NSString stringWithFormat:@"STATS: sent=%lld recv=%lld sendFail=%lld",
-           s_lastSendCount.load(), s_lastRecvCount.load(), s_lastSendFailCount.load()]);
+    snprintf(logBuf, sizeof(logBuf), "STATS: sent=%lld recv=%lld sendFail=%lld",
+           (long long)s_lastSendCount.load(), (long long)s_lastRecvCount.load(), (long long)s_lastSendFailCount.load());
+    ztLog(logBuf);
 }
 
 static void nodeThreadFunc() {
-    ztLog(@"Node thread started (BSD socket mode, NEPacketTunnel)");
+    ztLog("Node thread started (BSD socket mode, NEPacketTunnel)");
     int64_t lastStatusLog = 0;
     int bgTaskCount = 0;
 
     while (s_nodeRunning) {
-        @autoreleasepool {
-        int64_t now = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        int64_t now = (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
 
         {
             std::lock_guard<std::mutex> lock(s_nodeMutex);
@@ -386,10 +459,14 @@ static void nodeThreadFunc() {
                 enum ZT_ResultCode bgRc = ZT_Node_processBackgroundTasks(s_node, nullptr, now, &s_nextBackgroundTaskDeadline);
                 bgTaskCount++;
                 if (bgRc != ZT_RESULT_OK) {
-                    ztLog([NSString stringWithFormat:@"processBackgroundTasks error: %d", (int)bgRc]);
+                    char errBuf[64];
+                    snprintf(errBuf, sizeof(errBuf), "processBackgroundTasks error: %d", (int)bgRc);
+                    ztLog(errBuf);
                 }
                 if (bgTaskCount % 300 == 0) {
-                    ztLog([NSString stringWithFormat:@"BG task #%d running", bgTaskCount]);
+                    char bgBuf[64];
+                    snprintf(bgBuf, sizeof(bgBuf), "BG task #%d running", bgTaskCount);
+                    ztLog(bgBuf);
                 }
             }
         }
@@ -422,7 +499,9 @@ static void nodeThreadFunc() {
             int selRc = select(maxFd + 1, &readfds, nullptr, nullptr, &tv);
             if (selRc < 0) {
                 if (errno != EINTR) {
-                    ztLog([NSString stringWithFormat:@"select() error: %d (%s)", errno, strerror(errno)]);
+                    char errBuf[128];
+                    snprintf(errBuf, sizeof(errBuf), "select() error: %d (%s)", errno, strerror(errno));
+                    ztLog(errBuf);
                 }
                 continue;
             }
@@ -439,13 +518,17 @@ static void nodeThreadFunc() {
                         inet_ntop(AF_INET, &sin->sin_addr, rAddr, sizeof(rAddr));
                         rPort = ntohs(sin->sin_port);
                     }
-                    ztLog([NSString stringWithFormat:@"RX4 %zd bytes from %s:%u", n, rAddr, rPort]);
+                    char rxBuf[128];
+                    snprintf(rxBuf, sizeof(rxBuf), "RX4 %zd bytes from %s:%u", n, rAddr, rPort);
+                    ztLog(rxBuf);
                     std::lock_guard<std::mutex> lock(s_nodeMutex);
                     if (s_node) {
                         ZT_Node_processWirePacket(s_node, nullptr, now, s_udpSock4, &fromAddr, buf, (unsigned int)n, &s_nextBackgroundTaskDeadline);
                     }
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ztLog([NSString stringWithFormat:@"recvfrom IPv4 error: %d (%s)", errno, strerror(errno)]);
+                    char errBuf[128];
+                    snprintf(errBuf, sizeof(errBuf), "recvfrom IPv4 error: %d (%s)", errno, strerror(errno));
+                    ztLog(errBuf);
                 }
             }
             if (s_udpSock6 >= 0 && FD_ISSET(s_udpSock6, &readfds)) {
@@ -460,22 +543,25 @@ static void nodeThreadFunc() {
                         inet_ntop(AF_INET6, &sin6->sin6_addr, rAddr, sizeof(rAddr));
                         rPort = ntohs(sin6->sin6_port);
                     }
-                    ztLog([NSString stringWithFormat:@"RX6 %zd bytes from %s:%u", n, rAddr, rPort]);
+                    char rxBuf[128];
+                    snprintf(rxBuf, sizeof(rxBuf), "RX6 %zd bytes from %s:%u", n, rAddr, rPort);
+                    ztLog(rxBuf);
                     std::lock_guard<std::mutex> lock(s_nodeMutex);
                     if (s_node) {
                         ZT_Node_processWirePacket(s_node, nullptr, now, s_udpSock6, &fromAddr, buf, (unsigned int)n, &s_nextBackgroundTaskDeadline);
                     }
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ztLog([NSString stringWithFormat:@"recvfrom IPv6 error: %d (%s)", errno, strerror(errno)]);
+                    char errBuf[128];
+                    snprintf(errBuf, sizeof(errBuf), "recvfrom IPv6 error: %d (%s)", errno, strerror(errno));
+                    ztLog(errBuf);
                 }
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
         }
-        }
     }
 
-    ztLog(@"Node thread stopped");
+    ztLog("Node thread stopped");
 }
 
 @implementation ZTNodeBridge
@@ -485,25 +571,25 @@ static void nodeThreadFunc() {
     if (self) {
         s_sharedBridge = self;
         s_logEntries = [NSMutableArray new];
-        s_dataPath = dataPath;
-        [[NSFileManager defaultManager] createDirectoryAtPath:s_dataPath withIntermediateDirectories:YES attributes:nil error:nil];
+        s_dataPathStr = std::string([dataPath UTF8String]);
+        mkdir(s_dataPathStr.c_str(), 0755);
 
-        ztLog([NSString stringWithFormat:@"Data path: %@", s_dataPath]);
+        ztLog([NSString stringWithFormat:@"Data path: %@", dataPath]);
         ztLog(@"NEPacketTunnel extension - BSD socket mode");
 
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSString *planetPath = [s_dataPath stringByAppendingPathComponent:@"planet"];
-        if ([fm fileExistsAtPath:planetPath]) {
-            NSDictionary *attrs = [fm attributesOfItemAtPath:planetPath error:nil];
-            ztLog([NSString stringWithFormat:@"Planet file exists: %lu bytes", (unsigned long)[attrs fileSize]]);
+        struct stat st;
+        char planetPath[2048];
+        snprintf(planetPath, sizeof(planetPath), "%s/planet", s_dataPathStr.c_str());
+        if (stat(planetPath, &st) == 0) {
+            ztLog([NSString stringWithFormat:@"Planet file exists: %lld bytes", (long long)st.st_size]);
         } else {
             ztLog(@"No cached planet file (will use built-in defaults)");
         }
 
-        NSString *idSecPath = [s_dataPath stringByAppendingPathComponent:@"identity.secret"];
-        if ([fm fileExistsAtPath:idSecPath]) {
-            NSDictionary *attrs = [fm attributesOfItemAtPath:idSecPath error:nil];
-            ztLog([NSString stringWithFormat:@"Identity file exists: %lu bytes", (unsigned long)[attrs fileSize]]);
+        char idSecPath[2048];
+        snprintf(idSecPath, sizeof(idSecPath), "%s/identity.secret", s_dataPathStr.c_str());
+        if (stat(idSecPath, &st) == 0) {
+            ztLog([NSString stringWithFormat:@"Identity file exists: %lld bytes", (long long)st.st_size]);
         } else {
             ztLog(@"No existing identity (will generate new one)");
         }
@@ -525,7 +611,9 @@ static void nodeThreadFunc() {
         }
     }
 
-    NSString *pubPath = [s_dataPath stringByAppendingPathComponent:@"identity.public"];
+    char pubPathC[2048];
+    snprintf(pubPathC, sizeof(pubPathC), "%s/identity.public", s_dataPathStr.c_str());
+    NSString *pubPath = [NSString stringWithUTF8String:pubPathC];
     NSData *data = [NSData dataWithContentsOfFile:pubPath];
     if (data && data.length > 0) {
         NSString *pubStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -794,17 +882,33 @@ static void nodeThreadFunc() {
 }
 
 - (NSString *)fullIdentityString {
-    NSString *path = [s_dataPath stringByAppendingPathComponent:@"identity.secret"];
-    NSData *data = [NSData dataWithContentsOfFile:path];
-    if (data) return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return nil;
+    char pathC[2048];
+    snprintf(pathC, sizeof(pathC), "%s/identity.secret", s_dataPathStr.c_str());
+    int fd = open(pathC, O_RDONLY);
+    if (fd < 0) return nil;
+    off_t fileSize = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    if (fileSize <= 0 || fileSize > 65536) { close(fd); return nil; }
+    std::vector<char> buf(fileSize + 1, 0);
+    ssize_t n = read(fd, buf.data(), fileSize);
+    close(fd);
+    if (n <= 0) return nil;
+    return [NSString stringWithUTF8String:buf.data()];
 }
 
 - (NSString *)publicIdentityString {
-    NSString *path = [s_dataPath stringByAppendingPathComponent:@"identity.public"];
-    NSData *data = [NSData dataWithContentsOfFile:path];
-    if (data) return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return nil;
+    char pathC[2048];
+    snprintf(pathC, sizeof(pathC), "%s/identity.public", s_dataPathStr.c_str());
+    int fd = open(pathC, O_RDONLY);
+    if (fd < 0) return nil;
+    off_t fileSize = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    if (fileSize <= 0 || fileSize > 65536) { close(fd); return nil; }
+    std::vector<char> buf(fileSize + 1, 0);
+    ssize_t n = read(fd, buf.data(), fileSize);
+    close(fd);
+    if (n <= 0) return nil;
+    return [NSString stringWithUTF8String:buf.data()];
 }
 
 - (uint64_t)parseNetworkId:(NSString *)networkId {

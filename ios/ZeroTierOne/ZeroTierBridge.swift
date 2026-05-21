@@ -8,14 +8,11 @@ class ZeroTierBridge: NSObject {
     var currentNetworkId: String?
     var onStatusChange: ((Bool) -> Void)?
     var onOnlineStatusChange: ((Bool) -> Void)?
-    var onLogUpdate: (() -> Void)?
 
     private var vpnManager: NETunnelProviderManager?
     private let appGroupIdentifier = "group.com.zerotier.ZeroTierOne"
     private let tunnelBundleIdentifier = "com.zerotier.ZeroTierOne.Tunnel"
     private var statusTimer: Timer?
-    private var logTimer: Timer?
-    private var cachedLogEntries: [String] = []
     private var cachedNodeId: String = "--------"
 
     override init() {
@@ -86,18 +83,12 @@ class ZeroTierBridge: NSObject {
         statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.pollExtensionStatus()
         }
-        logTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.pollExtensionLogs()
-        }
         pollExtensionStatus()
-        pollExtensionLogs()
     }
 
     private func stopStatusPolling() {
         statusTimer?.invalidate()
         statusTimer = nil
-        logTimer?.invalidate()
-        logTimer = nil
     }
 
     private func pollExtensionStatus() {
@@ -127,18 +118,6 @@ class ZeroTierBridge: NSObject {
                 let defaults = UserDefaults(suiteName: self?.appGroupIdentifier ?? "")
                 defaults?.set(nodeId, forKey: "nodeId")
                 defaults?.synchronize()
-            }
-        }
-    }
-
-    private func pollExtensionLogs() {
-        sendIPCMessage(Data([0x03])) { [weak self] data in
-            guard let data = data,
-                  let logsStr = String(data: data, encoding: .utf8) else { return }
-            let entries = logsStr.components(separatedBy: "\n").filter { !$0.isEmpty }
-            DispatchQueue.main.async {
-                self?.cachedLogEntries = entries
-                self?.onLogUpdate?()
             }
         }
     }
@@ -259,10 +238,6 @@ class ZeroTierBridge: NSObject {
         currentNetworkId = nil
         onStatusChange?(false)
         onOnlineStatusChange?(false)
-    }
-
-    func logEntries() -> [String] {
-        return cachedLogEntries
     }
 
     func peerInfo() -> String {

@@ -34,41 +34,16 @@ static volatile int64_t s_nextBackgroundTaskDeadline = 0;
 static std::string s_dataPathStr;
 static int s_udpSock4 = -1;
 static int s_udpSock6 = -1;
-static NSMutableArray<NSString *> *s_logEntries = nil;
-static std::mutex s_logMutex;
 static std::atomic<int64_t> s_lastSendCount(0);
 static std::atomic<int64_t> s_lastRecvCount(0);
 static std::atomic<int64_t> s_lastSendFailCount(0);
 
 static void ztLog(const char *msg) {
     NSLog(@"[ZT-Tunnel] %s", msg);
-    {
-        std::lock_guard<std::mutex> lock(s_logMutex);
-        if (!s_logEntries) s_logEntries = [NSMutableArray new];
-        NSString *entry = [NSString stringWithFormat:@"%s", msg];
-        [s_logEntries addObject:entry];
-        if (s_logEntries.count > 500) [s_logEntries removeObjectAtIndex:0];
-    }
-    if (s_sharedBridge) {
-        if (s_sharedBridge.onLogMessage) {
-            s_sharedBridge.onLogMessage([NSString stringWithUTF8String:msg]);
-        }
-    }
 }
 
 static void ztLog(NSString *msg) {
     NSLog(@"[ZT-Tunnel] %@", msg);
-    {
-        std::lock_guard<std::mutex> lock(s_logMutex);
-        if (!s_logEntries) s_logEntries = [NSMutableArray new];
-        [s_logEntries addObject:msg];
-        if (s_logEntries.count > 500) [s_logEntries removeObjectAtIndex:0];
-    }
-    if (s_sharedBridge) {
-        if (s_sharedBridge.onLogMessage) {
-            s_sharedBridge.onLogMessage(msg);
-        }
-    }
 }
 
 static void updateSharedStatus() {
@@ -570,7 +545,6 @@ static void nodeThreadFunc() {
     self = [super init];
     if (self) {
         s_sharedBridge = self;
-        s_logEntries = [NSMutableArray new];
         s_dataPathStr = std::string([dataPath UTF8String]);
         mkdir(s_dataPathStr.c_str(), 0755);
 
@@ -646,11 +620,6 @@ static void nodeThreadFunc() {
         return [NSString stringWithUTF8String:buf];
     }
     return nil;
-}
-
-- (NSArray<NSString *> *)logEntries {
-    std::lock_guard<std::mutex> lock(s_logMutex);
-    return [s_logEntries copy];
 }
 
 - (NSString *)peerInfo {

@@ -7,7 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onFrameReceived)(NSData *frameData, unsigned int etherType);
 @property (nonatomic, copy, nullable) void (^onNetworkConfigChanged)(NSDictionary *config);
 @property (nonatomic, copy, nullable) void (^onStatusChanged)(BOOL online);
-@property (nonatomic, copy, nullable) void (^onLogMessage)(NSString *message);
 
 - (instancetype)initWithDataPath:(NSString *)dataPath;
 - (NSString *)nodeId;
@@ -21,7 +20,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)joinNetwork:(NSString *)networkId;
 - (void)leaveNetwork;
 - (void)sendFrame:(NSData *)frameData etherType:(unsigned int)etherType;
-- (NSArray<NSString *> *)logEntries;
 - (NSString *)peerInfo;
 - (NSString *)nodeStatusInfo;
 - (NSString *)fullIdentityString;

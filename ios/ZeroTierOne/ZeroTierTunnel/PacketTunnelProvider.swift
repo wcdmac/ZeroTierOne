@@ -84,10 +84,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self?.handleFrameReceived(frameData: frameData, etherType: etherType)
         }
 
-        nodeBridge?.onLogMessage = { message in
-            NSLog("[ZT-Tunnel] %@", message)
-        }
-
         guard let bridge = nodeBridge else {
             NSLog("[ZT-Tunnel] Failed to create ZTNodeBridge")
             return
@@ -258,10 +254,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let connected = nodeBridge?.isConnected() ?? false
             let status = "\(online ? 1 : 0):\(connected ? 1 : 0)"
             completionHandler?(status.data(using: .utf8))
-
-        case 0x03:
-            let logs = nodeBridge?.logEntries().joined(separator: "\n") ?? ""
-            completionHandler?(logs.data(using: .utf8))
 
         case 0x04:
             let info = nodeBridge?.peerInfo() ?? ""

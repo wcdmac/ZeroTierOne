@@ -19,13 +19,6 @@ class MainTabBarController: UITabBarController {
             selectedImage: UIImage(systemName: "key.fill")
         )
 
-        let logVC = LogViewController()
-        logVC.tabBarItem = UITabBarItem(
-            title: NSLocalizedString("TAB_LOG", value: "Log", comment: "Log tab"),
-            image: UIImage(systemName: "list.bullet.rectangle"),
-            selectedImage: UIImage(systemName: "list.bullet.rectangle.fill")
-        )
-
         let settingsVC = SettingsViewController()
         settingsVC.tabBarItem = UITabBarItem(
             title: NSLocalizedString("TAB_SETTINGS", value: "Settings", comment: "Settings tab"),
@@ -36,7 +29,6 @@ class MainTabBarController: UITabBarController {
         viewControllers = [
             UINavigationController(rootViewController: networkVC),
             UINavigationController(rootViewController: identityVC),
-            UINavigationController(rootViewController: logVC),
             UINavigationController(rootViewController: settingsVC)
         ]
     }
@@ -66,9 +58,6 @@ class NetworkViewController: UIViewController {
         ztBridge.onStatusChange = { [weak self] connected in
             self?.updateStatus()
             self?.networkListView.reloadData()
-        }
-        ztBridge.onLogUpdate = { [weak self] in
-            self?.updateStatus()
         }
 
         updateStatus()
@@ -372,132 +361,6 @@ class IdentityViewController: UIViewController {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         present(alert, animated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
-    }
-}
-
-class LogViewController: UIViewController {
-
-    private let ztBridge = ZeroTierBridge.sharedInstance()
-    private var tableView: UITableView!
-    private var logEntries: [String] = []
-    private var refreshTimer: Timer?
-    private var autoScroll = true
-    private var autoScrollButton: UIBarButtonItem!
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = NSLocalizedString("LOG_TITLE", value: "Log", comment: "Log page title")
-        view.backgroundColor = .systemBackground
-
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(title: NSLocalizedString("LOG_COPY", value: "Copy", comment: "Copy log"), style: .plain, target: self, action: #selector(copyLog)),
-            UIBarButtonItem(title: NSLocalizedString("LOG_CLEAR", value: "Clear", comment: "Clear log"), style: .plain, target: self, action: #selector(clearLog))
-        ]
-
-        autoScrollButton = UIBarButtonItem(
-            title: NSLocalizedString("LOG_AUTOSCROLL", value: "Auto", comment: "Auto scroll"),
-            style: .plain,
-            target: self,
-            action: #selector(toggleAutoScroll)
-        )
-        autoScrollButton.tintColor = .systemBlue
-        navigationItem.leftBarButtonItem = autoScrollButton
-
-        tableView = UITableView(frame: .zero, style: .plain)
-        tableView.translatesAutoresizingMaskIntoConstraints = false
-        tableView.dataSource = self
-        tableView.delegate = self
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "LogCell")
-        tableView.separatorInset = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
-        view.addSubview(tableView)
-
-        NSLayoutConstraint.activate([
-            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-
-        refreshLog()
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.refreshLog()
-        }
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
-
-    @objc private func refreshLog() {
-        let newEntries = ztBridge.logEntries()
-        if newEntries.count != logEntries.count {
-            let oldCount = logEntries.count
-            logEntries = newEntries
-            tableView.reloadData()
-            if autoScroll && logEntries.count > oldCount {
-                let lastRow = logEntries.count - 1
-                if lastRow >= 0 {
-                    tableView.scrollToRow(at: IndexPath(row: lastRow, section: 0), at: .bottom, animated: false)
-                }
-            }
-        }
-    }
-
-    @objc private func copyLog() {
-        UIPasteboard.general.string = logEntries.joined(separator: "\n")
-        let alert = UIAlertController(title: nil, message: NSLocalizedString("LOG_COPIED", value: "Log copied to clipboard", comment: "Log copied"), preferredStyle: .alert)
-        present(alert, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
-    }
-
-    @objc private func clearLog() {
-        logEntries = []
-        tableView.reloadData()
-    }
-
-    @objc private func toggleAutoScroll() {
-        autoScroll = !autoScroll
-        autoScrollButton.tintColor = autoScroll ? .systemBlue : .systemGray
-    }
-}
-
-extension LogViewController: UITableViewDataSource, UITableViewDelegate {
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return logEntries.count
-    }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "LogCell", for: indexPath)
-        let entry = logEntries[indexPath.row]
-
-        cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        cell.textLabel?.numberOfLines = 0
-        cell.textLabel?.text = entry
-        cell.selectionStyle = .none
-
-        if entry.contains("FAIL") || entry.contains("FATAL") || entry.contains("ERROR") {
-            cell.textLabel?.textColor = .systemRed
-        } else if entry.contains("TX ") || entry.contains("EVENT: ONLINE") {
-            cell.textLabel?.textColor = .systemGreen
-        } else if entry.contains("RX") {
-            cell.textLabel?.textColor = .systemBlue
-        } else if entry.contains("EVENT: OFFLINE") {
-            cell.textLabel?.textColor = .systemOrange
-        } else {
-            cell.textLabel?.textColor = .secondaryLabel
-        }
-
-        return cell
-    }
-
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
     }
 }
 
